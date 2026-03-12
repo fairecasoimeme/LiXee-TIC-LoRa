@@ -1,0 +1,31 @@
+# NXP SDK (71MB — trop gros, distribue separement)
+ZLinky/SDK_2_6_4_JN5189DK6/
+
+# Build outputs
+Binaries/
+*.o
+*.d
+*.axf
+*.bin
+*.map
+*.dis
+*.log
+
+# MCUXpresso IDE
+mcux/.settings/
+mcux/.metadata/
+*.launch
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+NUL
+
+# Claude Code internals
+.claude/
+
+# Doc/size tracking (auto-generated)
+Doc/size.txt
