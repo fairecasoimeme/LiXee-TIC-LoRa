@@ -1,4 +1,4 @@
-# NXP SDK (71MB — trop gros, distribue separement)
+# NXP SDK (71MB — distribue separement, voir README)
 ZLinky/SDK_2_6_4_JN5189DK6/
 
 # Build outputs
@@ -29,3 +29,11 @@ NUL
 
 # Doc/size tracking (auto-generated)
 Doc/size.txt
+
+# GitHub Desktop clone artifact
+LiXee-TIC-LoRa/
+
+# Temp / misc
+*.tmp
+*.bak
+gawk-*
