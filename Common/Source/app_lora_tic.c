@@ -38,6 +38,7 @@
 #include "app_zcl_task.h"
 
 #include "sx1280.h"
+#include "app_lora_pair.h"
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
 #include "App_Linky.h"
@@ -82,6 +83,9 @@ PRIVATE uint32 u32ConsecutiveFailures = 0;
 
 /* Flag SX1280 operationnel (positionne par app_start.c apres test SPI) */
 PRIVATE bool_t bSX1280Ready = FALSE;
+
+/* Flag TX pending — positionne par le callback ZTIMER, consomme dans la boucle main */
+PRIVATE volatile bool_t bLoRaTxPending = FALSE;
 
 /* Buffer TX (dimensionne pour le plus grand paquet + 2B MIC) */
 PRIVATE uint8 au8TxPayload[LORA_TIC_MAX_PAYLOAD + LORA_CRYPT_MIC_SIZE];
@@ -128,16 +132,10 @@ PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
  ****************************************************************************/
 PUBLIC void APP_cbTimerLoRa(void *pvParam)
 {
-    APP_tsEvent sAppEvent;
-    sAppEvent.eType = APP_E_EVENT_LORA_TX;
-
-    if (ZQ_bQueueSend(&APP_msgAppEvents, &sAppEvent) == FALSE)
-    {
-        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: Queue full, TX event dropped\r\n");
-    }
-
-    /* Timer relance dans APP_vLoRaTicSendPacket() apres acquisition TIC + TX
-     * (evite accumulation d'events pendant le blocage de vAPP_LinkySensorSample) */
+    /* Positionne un flag — le travail bloquant (TIC + TX) sera fait
+     * dans la boucle main APRES ZTIMER_vTask(), pour ne pas bloquer
+     * les autres timers (blink LED, button scan, etc.) */
+    bLoRaTxPending = TRUE;
 }
 
 /****************************************************************************
@@ -154,6 +152,29 @@ PUBLIC void APP_vLoRaTicSetReady(bool_t bReady)
     bSX1280Ready = bReady;
     u32ConsecutiveFailures = 0;
     DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: SX1280 ready = %d\r\n", bReady);
+}
+
+/****************************************************************************
+ *
+ * NAME: APP_vLoRaTicPollTx
+ *
+ * DESCRIPTION:
+ * Verifie si un TX est en attente (flag pose par APP_cbTimerLoRa).
+ * Doit etre appele depuis la boucle main, APRES ZTIMER_vTask(),
+ * pour que le travail bloquant (TIC acquisition + TX LoRa)
+ * ne gele pas les autres timers (LED blink, button scan...).
+ *
+ ****************************************************************************/
+PUBLIC void APP_vLoRaTicPollTx(void)
+{
+    if (bLoRaTxPending)
+    {
+        bLoRaTxPending = FALSE;
+        if (APP_bLoraPairIsPaired())
+        {
+            APP_vLoRaTicSendPacket();
+        }
+    }
 }
 
 /****************************************************************************

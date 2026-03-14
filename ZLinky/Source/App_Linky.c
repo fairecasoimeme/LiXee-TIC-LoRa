@@ -1187,13 +1187,10 @@ PUBLIC void vAPP_LinkySensorSample(void)
     /* Get_BattVolt() desactive — ADC clock off (power optimization) */
     sBaseDevice.sPowerConfigServerCluster.u16MainsVoltage = 0;
 
-    DBG_vPrintf(TRACE_LINKY, "\r\n ----------ZTIMER_eStart Next time : %d\r\n", sBaseDevice.sLinkyServerCluster.au8LinkyPeriodicSend );
-
-
-    //ZTIMER_eStart(u8TimerLinky, 13* 1000 );
-    //ZTIMER_eStart(u8TimerLinky, sBaseDevice.sLinkyServerCluster.au8LinkyPeriodicSend * 1000 );
-    //ZTIMER_eStop(u8TimerLinky);
-    ZTIMER_eStart(u8TimerLinky, sBaseDevice.sLinkyServerCluster.au8LinkyPeriodicSend * 1000);
+    /* LoRa-only mode: u8TimerLinky desactive — l'acquisition TIC est pilotee
+     * par u8TimerLoRa dans app_lora_tic.c (evite double-posting dans la queue
+     * APP_msgAppEvents qui causait un debordement et bloquait tous les events) */
+    /* ZTIMER_eStart(u8TimerLinky, sBaseDevice.sLinkyServerCluster.au8LinkyPeriodicSend * 1000); */
 }
 
 

@@ -131,22 +131,13 @@ PUBLIC void APP_vInitialiseRouter(void)
 PUBLIC void APP_taskRouter(void)
 {
     APP_tsEvent sAppEvent;
-    sAppEvent.eType = APP_E_EVENT_NONE;
 
-    if (ZQ_bQueueReceive(&APP_msgAppEvents, &sAppEvent) == TRUE)
+    /* LoRa TX n'utilise plus la queue (appel direct depuis APP_cbTimerLoRa).
+     * La queue ne sert plus qu'aux events bouton. On la vide entierement. */
+    while (ZQ_bQueueReceive(&APP_msgAppEvents, &sAppEvent) == TRUE)
     {
         switch (sAppEvent.eType)
         {
-            case APP_E_EVENT_PERIODIC_REPORT:
-                if (APP_bLoraPairIsPaired())
-                    vAPP_LinkySensorSample();
-                break;
-
-            case APP_E_EVENT_LORA_TX:
-                if (APP_bLoraPairIsPaired())
-                    APP_vLoRaTicSendPacket();
-                break;
-
             case APP_E_EVENT_BUTTON_DOWN:
                 APP_vLoraPairOnButton(APP_E_EVENT_BUTTON_DOWN);
                 break;
