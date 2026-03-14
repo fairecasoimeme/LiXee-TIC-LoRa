@@ -144,6 +144,13 @@ PUBLIC void APP_vLoRaTicStart(void);
  */
 PUBLIC void APP_vLoRaTicSetReady(bool_t bReady);
 
+/**
+ * @brief Verifie si un TX est en attente et l'execute.
+ *        Doit etre appele dans la boucle main APRES ZTIMER_vTask()
+ *        pour ne pas bloquer les autres timers pendant l'acquisition TIC.
+ */
+PUBLIC void APP_vLoRaTicPollTx(void);
+
 /****************************************************************************/
 /***        END OF FILE                                                   ***/
 /****************************************************************************/

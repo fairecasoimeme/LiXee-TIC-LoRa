@@ -66,6 +66,7 @@
 #endif
 
 #include "app_leds.h"
+#include "app_lora_tic.h"
 #include "temp_sensor_drv.h"
 #include "radio.h"
 #include "PDM.h"
@@ -93,7 +94,7 @@
 #define TRACE_APP   TRUE
 #endif
 
-#define APP_QUEUE_SIZE               8
+#define APP_QUEUE_SIZE               16
 #define BDB_QUEUE_SIZE               2
 
 #define APP_NUM_STD_TMRS             7  /* Linky, Blink, LedON, LoRa, Awake, LoraPair, ButtonScan */
@@ -317,6 +318,7 @@ void main_task (uint32_t parameter)
          /* Main loop cooperatif LoRa-only (Zigbee runtime supprime) */
         ZTIMER_vTask();
         APP_taskRouter();
+        APP_vLoRaTicPollTx();
 
 
 #ifdef WATCHDOG_ALLOWED
