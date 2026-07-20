@@ -17,10 +17,9 @@ void SX1280_Init(void)
      * SetRegulatorMode : choix entre LDO (0x00) et DC-DC (0x01).
      * - Module NiceRF LORA1280-TCXO : pas de DC-DC sur le PCB -> mode LDO
      * - Shield SX1280RF1ZHP (Semtech) : DC-DC sur le PCB -> mode DC-DC
-     * Le SX1280 demarre en LDO par defaut, donc pour le LORA1280-TCXO
-     * on peut soit ne pas appeler SetRegulatorMode, soit confirmer LDO.
+     * - Proto custom (SX1281IMLTRT + L3 15uH) : DC-DC sur le PCB -> mode DC-DC
      */
-    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
+    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
 
     PRINTF("SX1280 initialized\r\n");
 }

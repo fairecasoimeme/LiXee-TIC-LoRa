@@ -368,6 +368,23 @@ APPSRC += sx1280.c
 APPSRC += app_lora_tic.c
 APPSRC += app_lora_pair.c
 APPSRC += app_lora_crypt.c
+APPSRC += app_lora_channels.c
+APPSRC += app_lora_ota.c
+
+# LoRa OTA : OtaSupport NXP pour flash dual-bank (sans Zigbee OTA cluster).
+LORA_OTA ?= 1
+ifeq ($(LORA_OTA),1)
+    CFLAGS   += -DOTA_INTERNAL_STORAGE
+    CFLAGS   += -DgEepromType_d=gEepromDevice_InternalFlash_c
+    CFLAGS   += -DgUpgradeImageOnCurrentDevice_d=0
+    CFLAGS   += -DgEnableOTAServer_d=0
+    APPSRC   += OtaSupport.c
+    APPSRC   += psector_api.c
+    APPSRC   += Eeprom_InternalFlash.c
+    APPSRC   += Flash_Adapter.c
+    INCFLAGS += -I$(SDK2_BASE_DIR)/middleware/wireless/framework/OtaSupport/Interface
+    INCFLAGS += -I$(SDK2_BASE_DIR)/middleware/wireless/framework/Flash/External/Interface
+endif
 
 ifeq ($(APP_NTAG_NWK),1)
 APPSRC += app_ntag.c
@@ -539,7 +556,7 @@ endif
 
 .PHONY: all clean
 # Path to directories containing application source 
-vpath % $(APP_SRC_DIR):$(APP_COMMON_SRC_DIR):$(ZCL_SRC_DIRS):$(ZCL_SRC):$(BDB_SRC_DIR):$(BOARD_DIR):$(ZIGBEE_BASE_SRC):$(NTAG_SRC)
+vpath % $(APP_SRC_DIR):$(APP_COMMON_SRC_DIR):$(ZCL_SRC_DIRS):$(ZCL_SRC):$(BDB_SRC_DIR):$(BOARD_DIR):$(ZIGBEE_BASE_SRC):$(NTAG_SRC):$(SDK2_BASE_DIR)/middleware/wireless/framework/OtaSupport/Source:$(SDK2_BASE_DIR)/devices/JN5189/drivers:$(SDK2_BASE_DIR)/middleware/wireless/framework/Flash/External/Source:$(SDK2_BASE_DIR)/middleware/wireless/framework/Flash/Internal
 
 ifeq ($(BUILD_OTA_FILES),1)
     all: $(APP_OUT_DIR)/$(TARGET_FULL)_V3.ota

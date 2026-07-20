@@ -50,6 +50,7 @@
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
 #include "app_lora_tic.h"
+#include "app_lora_channels.h"
 
 #ifdef APP_LOW_POWER_API
 #include "PWR_interface.h"
@@ -161,31 +162,27 @@ static void ConfigureLoRa(void)
 	        PRINTF("CadParams OK (CAD_ON_8_SYMB)\r\n");
 	    }
 
-	    // 5) Regulator Mode LDO
-	    //    Le module NiceRF LORA1280-TCXO n'a PAS de DC-DC sur le PCB.
-	    //    Le SX1280 demarre en LDO par defaut, on confirme explicitement.
-	    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
-	    PRINTF("Regulator Mode LDO OK\r\n");
+	    // 5) Regulator Mode LDO (par defaut)
+	    //    Le chip demarre en LDO, on peut passer en DC-DC apres si besoin.
+	    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
+	    PRINTF("Regulator Mode DC-DC OK\r\n");
 
-	    // 6) Frequence : 2490 MHz (au-dessus de tous les canaux WiFi)
-	    //    WiFi 2.4GHz: ch1=2412, ch6=2437, ch11=2462, ch13=2472 MHz
-	    //    2490 MHz = bien au-dessus de ch13, moins d'interferences
-	    SX1280_SetRfFrequency(2490000000UL);
-	    for(volatile uint32_t i = 0; i < 48000; i++); // 1ms
-	    PRINTF("RF Frequency OK (2490 MHz, above WiFi)\r\n");
+	    // 6) Frequence : PAIR_CHANNEL (2440 MHz) pour le test au boot.
+	    //    Bande ISM 2.4 GHz Europe (2400-2483.5 MHz). Le canal operationnel
+	    //    sera selectionne par le recepteur au pairing.
+	    APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
+	    for(volatile uint32_t i = 0; i < 48000; i++); // 1ms PLL settling
+	    PRINTF("RF Frequency OK (PAIR_CHANNEL %d, in ISM band)\r\n", LORA_PAIR_CHANNEL);
 
-	    // 7) Modulation : SF10, BW406, CR4/5 (config finale avec capa 680uF)
-	    //    SF10 = +8dB vs SF7, CR4/5 = airtime ~96ms
-	    //    NOTE: reg 0x093C utilise maintenant read-modify-write (comme RadioLib)
-	    //    SetModulationParams inclut maintenant les ecritures registres
-	    //    obligatoires 0x0925 et 0x093C automatiquement.
+	    // 7) Modulation : SF11, BW406, CR4/5
+	    //    SF11 = sensibilite -126 dBm, airtime ~200ms.
 	    SX1280_LoRaModParams_t modParams = {
-	        .spreadingFactor = SX1280_LORA_SF10,
+	        .spreadingFactor = SX1280_LORA_SF11,
 	        .bandwidth = SX1280_LORA_BW_406,
 	        .codingRate = SX1280_LORA_CR_4_5
 	    };
 	    SX1280_SetModulationParams(&modParams);
-	    PRINTF("Modulation OK (SF10, BW406, CR4/5)\r\n");
+	    PRINTF("Modulation OK (SF11, BW406, CR4/5)\r\n");
 
 	    // 8) LoRa Sync Word : 0x14,0x24 = sync word 0x12 (defaut RadioLib)
 	    //    CRITIQUE : le test SPI au boot ecrit dans le registre 0x0944,
@@ -213,7 +210,7 @@ static void ConfigureLoRa(void)
 	    PRINTF("Packet Params OK (preamble=0x18=16sym, explicit, CRC=0x20, IQ=0x40)\r\n");
 
 	    // 9) TX Power : +10 dBm (max EU ETSI EN 300 328 = +10 dBm EIRP)
-	    SX1280_SetTxParams(10, SX1280_RAMP_20_US);
+	    SX1280_SetTxParams(13, SX1280_RAMP_20_US);  /* +13 dBm (max) - test stabilite */
 	    PRINTF("TX Params OK (power=+10dBm EU, ramp=20us)\r\n");
 
 	    // 10) IRQ : TX_DONE + RX_TX_TIMEOUT sur DIO1

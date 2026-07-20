@@ -42,6 +42,7 @@
 #include "sx1280.h"
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
+#include "app_lora_channels.h"
 
 /* ZPS for IEEE MAC address */
 #include "zps_apl_zdo.h"
@@ -102,7 +103,7 @@ PRIVATE void vReadMAC(uint8 *pu8MAC);
 PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE void vSendPairConfirm(void);
-PRIVATE void vReconfigureForPairTx(void);
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel);
 
 
 /****************************************************************************/
@@ -134,22 +135,42 @@ PUBLIC void APP_vLoraPairInit(void)
     if (sPairingData.u32Magic == LORA_PAIR_MAGIC)
     {
         ePairState = LORA_PAIR_PAIRED;
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Paired (key loaded from PDM)\r\n");
+
+        /* Validate stored channel; fallback to PAIR_CHANNEL if invalid (old PDM record) */
+        if (!APP_bLoraChannelIsValid(sPairingData.u8OpChannel))
+        {
+            DBG_vPrintf(TRACE_LORA_PAIR,
+                "LORA_PAIR: PDM has invalid op_channel %d, fallback to PAIR_CHANNEL %d\r\n",
+                sPairingData.u8OpChannel, LORA_PAIR_CHANNEL);
+            sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
+        }
+
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: Paired (key loaded from PDM, op_channel=%d)\r\n",
+            sPairingData.u8OpChannel);
 
         DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Key=");
         for (i = 0; i < LORA_AES_KEY_SIZE; i++)
             DBG_vPrintf(TRACE_LORA_PAIR, "%02X", sPairingData.au8NetKey[i]);
         DBG_vPrintf(TRACE_LORA_PAIR, "\r\n");
+
+        /* Set RF frequency to operational channel */
+        APP_vLoraChannelSet(sPairingData.u8OpChannel);
     }
     else
     {
-        /* Not paired (PDM empty/erased) → auto-pairing at boot */
+        /* Not paired (PDM empty/erased) → auto-pairing at boot on PAIR_CHANNEL */
         ePairState = LORA_PAIR_PAIRING;
         u8PairTickCount = 0;
         u8PairSeq = 0;
         u8LedBlinkCount = 0;
+        sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
 
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Not paired — auto-entering PAIRING mode\r\n");
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Not paired — auto-entering PAIRING mode on ch %d\r\n",
+                    LORA_PAIR_CHANNEL);
+
+        /* Set RF to PAIR_CHANNEL for handshake */
+        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
 
         /* LED fast blink (250ms period: 100ms ON + 150ms OFF → visible 4Hz) */
         vStartBlinkTimer(250);
@@ -197,6 +218,10 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
         u8PairTickCount = 0;
         u8PairSeq = 0;
         u8LedBlinkCount = 0;
+        sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
+
+        /* Switch RF back to PAIR_CHANNEL for the handshake */
+        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
 
         /* LED fast blink (150ms) for pairing mode */
         vStartBlinkTimer(150);
@@ -248,6 +273,18 @@ PUBLIC uint8* APP_pu8LoraPairGetMAC(void)
 
 /****************************************************************************
  *
+ * NAME: APP_u8LoraPairGetOpChannel
+ *
+ ****************************************************************************/
+PUBLIC uint8 APP_u8LoraPairGetOpChannel(void)
+{
+    if (APP_bLoraChannelIsValid(sPairingData.u8OpChannel))
+        return sPairingData.u8OpChannel;
+    return LORA_PAIR_CHANNEL;
+}
+
+/****************************************************************************
+ *
  * NAME: APP_eLoraPairGetState
  *
  ****************************************************************************/
@@ -283,11 +320,14 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
     if (bListenForPairResponse())
     {
         /* 3) Got response! Send PAIR_CONFIRM */
+        PRINTF("[PAIR-CB] before vSendPairConfirm()\r\n");
         vSendPairConfirm();
+        PRINTF("[PAIR-CB] after vSendPairConfirm(), now SavePairingToPDM\r\n");
 
         /* 4) Save to PDM and go PAIRED */
         sPairingData.u32Magic = LORA_PAIR_MAGIC;
         vSavePairingToPDM();
+        PRINTF("[PAIR-CB] PDM save done\r\n");
 
         ePairState = LORA_PAIR_PAIRED;
 
@@ -429,15 +469,22 @@ PRIVATE void vReadMAC(uint8 *pu8MAC)
  * NAME: vReconfigureForPairTx
  *
  * DESCRIPTION:
- * Quick reconfigure SX1280 for TX during pairing
- * (no full HW reset — just set IRQ for TX_DONE)
+ * Reconfigure le SX1280 pour un TX d'appairage sur le canal donne.
+ *
+ * Fait une reconfiguration COMPLETE (reset materiel inclus), comme le
+ * chemin TX TIC. Auparavant cette fonction se contentait d'un standby +
+ * IRQ et dependait donc de la configuration laissee par un autre module :
+ *   - au boot, celle posee par app_start.c → l'appairage fonctionnait
+ *   - apres un appui long alors que le module etait appaire, celle laissee
+ *     par le dernier TX TIC → l'appairage ne partait pas tant qu'on n'avait
+ *     pas coupe puis remis l'alimentation.
  *
  ****************************************************************************/
-PRIVATE void vReconfigureForPairTx(void)
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel)
 {
-    /* Set standby */
-    SX1280_SetStandby(SX1280_STANDBY_RC);
-    SX1280_HAL_WaitOnBusy();
+    /* Reset + config complete sur le canal demande (packet type, modulation,
+     * sync word, packet params, TX power) puis IRQ TX_DONE sur DIO1. */
+    APP_vLoRaTicReconfigureRadio(u8Channel);
 
     /* IRQ: TX_DONE + TIMEOUT on DIO1 */
     SX1280_SetDioIrqParams(
@@ -450,31 +497,59 @@ PRIVATE void vReconfigureForPairTx(void)
  * NAME: vSendPairRequest
  *
  * DESCRIPTION:
- * Build and transmit PAIR_REQUEST packet (11 bytes):
+ * Build and transmit PAIR_REQUEST packet.
+ *
+ * Base (11 octets — retro-compatible avec les receivers antérieurs a v2.22) :
  *   [0]   0x13 (v1, pair_request)
  *   [1]   sequence
  *   [2-9] MAC address (8 bytes)
  *   [10]  channel (0 = default)
  *
+ * Extension (LiXee-Box >= v2.22, active via LORA_PAIR_REQUEST_HAS_EXT) :
+ *   [11-12] device_id (uint16 BE)   — nomme data/tp/<device_id>.json
+ *   [13]    model_len (N)
+ *   [14..]  model ASCII (N octets)  — cle dans le JSON template
+ *
+ * Un receiver ancien lira ses 11 octets et ignorera la queue.
+ *
  ****************************************************************************/
 PRIVATE void vSendPairRequest(void)
 {
-    uint8 au8Pkt[LORA_PAIR_REQUEST_SIZE];
+    uint8 au8Pkt[LORA_PAIR_REQUEST_MAX_SIZE];
+    uint8 u8PktLen = LORA_PAIR_REQUEST_BASE_SIZE;
 
     au8Pkt[0] = (LORA_TIC_PROTOCOL_VERSION_PAIR << 4) | LORA_TIC_PKT_PAIR_REQUEST;
     au8Pkt[1] = u8PairSeq++;
     memcpy(&au8Pkt[2], sPairingData.au8MAC, LORA_MAC_SIZE);
     au8Pkt[10] = 0; /* channel = default */
 
-    DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: TX PAIR_REQUEST seq=%d\r\n", au8Pkt[1]);
+#if LORA_PAIR_REQUEST_HAS_EXT
+    /* Annonce du type d'objet : device_id (BE) + model_len + model ASCII */
+    au8Pkt[11] = (uint8)((LORA_DEVICE_ID_ZLINKY_TIC >> 8) & 0xFF);
+    au8Pkt[12] = (uint8)(LORA_DEVICE_ID_ZLINKY_TIC & 0xFF);
+
+    static const char szModel[] = LORA_DEVICE_MODEL_ZLINKY_TIC;
+    uint8 u8ModelLen = (uint8)(sizeof(szModel) - 1);  /* sans le nul terminal */
+    if (u8ModelLen > LORA_DEVICE_MODEL_MAX_LEN) {
+        u8ModelLen = LORA_DEVICE_MODEL_MAX_LEN;
+    }
+    au8Pkt[13] = u8ModelLen;
+    memcpy(&au8Pkt[14], szModel, u8ModelLen);
+    u8PktLen = LORA_PAIR_REQUEST_BASE_SIZE + 3 + u8ModelLen;
+#endif
+
+    DBG_vPrintf(TRACE_LORA_PAIR,
+                "LORA_PAIR: TX PAIR_REQUEST seq=%d len=%d (device_id=0x%04X model=\"%s\")\r\n",
+                au8Pkt[1], u8PktLen, LORA_DEVICE_ID_ZLINKY_TIC, LORA_DEVICE_MODEL_ZLINKY_TIC);
 
     /* Silence SPI debug during TX */
     g_u8SX1280_HalSilent = 1;
 
-    vReconfigureForPairTx();
+    /* Reconfig complete sur le canal d'appairage (fixe, connu des deux cotes) */
+    vReconfigureForPairTx(LORA_PAIR_CHANNEL);
 
     /* Send payload */
-    SX1280_SendPayload(au8Pkt, LORA_PAIR_REQUEST_SIZE);
+    SX1280_SendPayload(au8Pkt, u8PktLen);
 
     /* Poll DIO1 for TX_DONE (max 500ms) */
     uint32 u32Start = 0;
@@ -590,7 +665,20 @@ PRIVATE bool_t bListenForPairResponse(void)
     /* Extract AES key (bytes 2..17) */
     memcpy(sPairingData.au8NetKey, &au8RxBuf[2], LORA_AES_KEY_SIZE);
 
-    DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: PAIR_RESPONSE received! Key extracted.\r\n");
+    /* Extract operational channel (byte 19) */
+    uint8 u8OpCh = au8RxBuf[19];
+    if (!APP_bLoraChannelIsValid(u8OpCh))
+    {
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: receiver assigned invalid channel %d, ignoring → fallback to PAIR_CHANNEL\r\n",
+            u8OpCh);
+        u8OpCh = LORA_PAIR_CHANNEL;
+    }
+    sPairingData.u8OpChannel = u8OpCh;
+
+    DBG_vPrintf(TRACE_LORA_PAIR,
+        "LORA_PAIR: PAIR_RESPONSE received! Key extracted, op_channel=%d\r\n",
+        u8OpCh);
 
     return TRUE;
 }
@@ -642,23 +730,55 @@ PRIVATE void vSendPairConfirm(void)
     DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: TX PAIR_CONFIRM proof=%02X%02X%02X%02X\r\n",
                 au8Pkt[10], au8Pkt[11], au8Pkt[12], au8Pkt[13]);
 
-    g_u8SX1280_HalSilent = 1;
+    PRINTF("[CONF] step 1: enter (switching to op_channel=%d)\r\n",
+           sPairingData.u8OpChannel);
+    g_u8SX1280_HalSilent = 0;  /* DEBUG: keep SPI traces visible */
 
-    vReconfigureForPairTx();
+    /* Reconfig complete directement sur l'op_channel assigne par le recepteur :
+     * c'est la qu'il ecoute le CONFIRM. */
+    PRINTF("[CONF] step 2: vReconfigureForPairTx(ch=%d)\r\n", sPairingData.u8OpChannel);
+    vReconfigureForPairTx(sPairingData.u8OpChannel);
+    PRINTF("[CONF] step 3: SendPayload(%d bytes)\r\n", LORA_PAIR_CONFIRM_SIZE);
     SX1280_SendPayload(au8Pkt, LORA_PAIR_CONFIRM_SIZE);
+    PRINTF("[CONF] step 4: SendPayload returned\r\n");
 
-    /* Poll DIO1 for TX_DONE (max 500ms) */
+    /* Poll DIO1 for TX_DONE - shortened with periodic status checks */
     uint32 u32Start;
-    for (u32Start = 0; u32Start < 6000000; u32Start++)
+    bool_t bDio1 = FALSE;
+    uint32 u32StatusCheckPeriod = 100000;
+    for (u32Start = 0; u32Start < 1000000; u32Start++)  /* reduced loop */
     {
         if (GPIO_PinRead(GPIO, LORA_GPIO_PORT, LORA_DIO1_PIN))
+        {
+            bDio1 = TRUE;
             break;
-        ZTIMER_vTask();  /* LED blink pendant le poll TX */
+        }
+        ZTIMER_vTask();
+        /* Periodic status check */
+        if ((u32Start % u32StatusCheckPeriod) == 0 && u32Start > 0)
+        {
+            uint8 u8Status = SX1280_GetStatus();
+            uint16 u16Irq = SX1280_GetIrqStatus();
+            uint8 dio1_now = GPIO_PinRead(GPIO, LORA_GPIO_PORT, LORA_DIO1_PIN);
+            PRINTF("[CONF] poll %lu: status=0x%02X irq=0x%04X DIO1=%d\r\n",
+                   u32Start, u8Status, u16Irq, dio1_now);
+        }
+    }
+    PRINTF("[CONF] step 5: DIO1 poll done (DIO1=%d, count=%lu)\r\n",
+           bDio1, u32Start);
+
+    /* Final status snapshot */
+    {
+        uint8 u8Status = SX1280_GetStatus();
+        uint16 u16Irq = SX1280_GetIrqStatus();
+        PRINTF("[CONF] final status=0x%02X irq=0x%04X\r\n", u8Status, u16Irq);
     }
 
+    PRINTF("[CONF] step 6: ClearIrqStatus\r\n");
     SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
+    PRINTF("[CONF] step 7: SetStandby\r\n");
     SX1280_SetStandby(SX1280_STANDBY_RC);
-    g_u8SX1280_HalSilent = 0;
+    PRINTF("[CONF] step 8: done, returning\r\n");
 }
 
 /* LED management:

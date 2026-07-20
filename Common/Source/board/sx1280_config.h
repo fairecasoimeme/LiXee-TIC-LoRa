@@ -29,10 +29,8 @@
 #define SX1280_GPIO_PORT            0
 
 // Configuration SPI
-// Note: 1 MHz au lieu de 4 MHz pour fiabiliser la communication
-// sur fils Dupont (longueur ~10-15cm, pas de plan de masse).
-// Le SX1280 supporte jusqu'a 18 MHz, mais l'integrite du signal
-// sur des fils volants est limitee.
-#define SX1280_SPI_BAUDRATE         1000000  // 1 MHz (debug, fils Dupont)
+// Le SX1280 supporte jusqu'a 18 MHz. 1 MHz est conservatif et fiable
+// sur des PCB customs avec soudures à la main.
+#define SX1280_SPI_BAUDRATE         1000000  // 1 MHz
 
 #endif // SX1280_CONFIG_H

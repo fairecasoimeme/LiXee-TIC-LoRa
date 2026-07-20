@@ -24,11 +24,13 @@
 /***        Macro Definitions                                             ***/
 /****************************************************************************/
 
-/* Intervalle TX LoRa en ms (1 paquet ESSENTIAL par seconde) */
-#define LORA_TX_INTERVAL_MS         1000
+/* Intervalle TX LoRa en ms (1 paquet ESSENTIAL toutes les 5 secondes) */
+#define LORA_TX_INTERVAL_MS         5000
 
-/* Nombre d'ESSENTIAL entre chaque EXTENDED piggyback */
-#define LORA_TIC_EXTENDED_INTERVAL  10
+/* Nombre d'ESSENTIAL entre chaque EXTENDED piggyback
+ * Avec 1 essential/5s x 4 = 1 extended toutes les 20s
+ * Cycle complet des 7 sous-types extended : ~140s (~2.5 min) */
+#define LORA_TIC_EXTENDED_INTERVAL  4
 
 /* Version du protocole LoRa TIC */
 #define LORA_TIC_PROTOCOL_VERSION   0x01
@@ -37,13 +39,51 @@
 #define LORA_TIC_PKT_DATA_ESSENTIAL 0x01
 #define LORA_TIC_PKT_DATA_EXTENDED  0x02
 
-/* Taille max payload (contrainte SF10 fiabilite) */
-#define LORA_TIC_MAX_PAYLOAD        20
+/* Taille max payload.
+ * 22 = TARIFF_LABEL avec un libelle de 16 caracteres (6 + 16).
+ * A SF11/BW406 l'airtime reste ~10 ms de plus qu'un paquet de 19 : negligeable. */
+#define LORA_TIC_MAX_PAYLOAD        22
 
 /* Taille du paquet DATA_ESSENTIAL (17 octets) */
 #define LORA_TIC_DATA_ESSENTIAL_SIZE 17
 
-/* Sous-types DATA_EXTENDED (7 sous-types, cycle complet ~70s) */
+/* Codes tarif unifie (POWER_MAX_CFG octet [17], ex-reserved)
+ *
+ * La signification depend du mode Linky (POWER_MAX_CFG octet [16]) :
+ *
+ * Mode Standard (bit 0 de au8LinkyMode == 1) :
+ *   redondant avec NTARF en [13] pour compat, mais reprend :
+ *   0     = inconnu / pas encore renseigne
+ *   1..10 = NTARF direct (index du tarif en cours)
+ *
+ * Mode Historique (bit 0 == 0) — NTARF est 0 dans ce mode :
+ *   0  = inconnu
+ *   1  = BASE (PTEC "TH.." ou "BASE")
+ *   2  = HP (PTEC "HP..")
+ *   3  = HC (PTEC "HC..")
+ *   4  = EJP heures normales (PTEC "HN..")
+ *   5  = EJP pointe mobile (PTEC "PM..")
+ *   6  = TEMPO Bleu HC (PTEC "HCJB")
+ *   7  = TEMPO Bleu HP (PTEC "HPJB")
+ *   8  = TEMPO Blanc HC (PTEC "HCJW")
+ *   9  = TEMPO Blanc HP (PTEC "HPJW")
+ *   10 = TEMPO Rouge HC (PTEC "HCJR")
+ *   11 = TEMPO Rouge HP (PTEC "HPJR")
+ */
+#define LORA_TARIF_UNKNOWN               0
+#define LORA_TARIF_HISTO_BASE            1
+#define LORA_TARIF_HISTO_HP              2
+#define LORA_TARIF_HISTO_HC              3
+#define LORA_TARIF_HISTO_EJP_HN          4
+#define LORA_TARIF_HISTO_EJP_PM          5
+#define LORA_TARIF_HISTO_TEMPO_BLEU_HC   6
+#define LORA_TARIF_HISTO_TEMPO_BLEU_HP   7
+#define LORA_TARIF_HISTO_TEMPO_BLANC_HC  8
+#define LORA_TARIF_HISTO_TEMPO_BLANC_HP  9
+#define LORA_TARIF_HISTO_TEMPO_ROUGE_HC  10
+#define LORA_TARIF_HISTO_TEMPO_ROUGE_HP  11
+
+/* Sous-types DATA_EXTENDED (8 sous-types, cycle complet ~160s) */
 #define LORA_TIC_EXT_CURRENT_VOLTAGE  0x00  /* IRMS1/2/3 + URMS1/2/3 (15B) */
 #define LORA_TIC_EXT_ENERGY           0x01  /* EAST + EAIT + EASF01 + EASF02 (19B) */
 #define LORA_TIC_EXT_ENERGY_2         0x02  /* EASF03 + EASF04 + EASF05 + EASF06 (19B) */
@@ -51,10 +91,39 @@
 #define LORA_TIC_EXT_POWER_MAX_CFG    0x04  /* SMAXSN/IN + SINSTI + CCAIN + config (18B) */
 #define LORA_TIC_EXT_DAILY_ENERGY     0x05  /* EASD01/02/03/04 (19B) */
 #define LORA_TIC_EXT_COMPLEMENT       0x06  /* DPM/FPM 1-3 (9B) */
-#define LORA_TIC_EXT_SUBTYPE_COUNT    7
+#define LORA_TIC_EXT_TARIFF_LABEL     0x07  /* LTARF (Std) / PTEC (Histo) en ASCII (6..22B) */
+#define LORA_TIC_EXT_METER_SERIAL     0x08  /* ADSC (Std) / ADCO (Histo) en ASCII (4..16B) */
+#define LORA_TIC_EXT_METER_DATE       0x09  /* DATE horodate compteur, Std seul (4..17B) */
+#define LORA_TIC_EXT_TARIFF_OPTION    0x0A  /* OPTARIF + DEMAIN (Histo) + CCASN/-1 (Std) (16B) */
+#define LORA_TIC_EXT_SUBTYPE_COUNT    11
 
-/* Taille max d'un paquet DATA_EXTENDED (ENERGY = 19B) */
-#define LORA_TIC_DATA_EXTENDED_MAX_SIZE 19
+/* Taille max d'un paquet DATA_EXTENDED (TARIFF_LABEL = 6 + 16 = 22B) */
+#define LORA_TIC_DATA_EXTENDED_MAX_SIZE 22
+
+/* TARIFF_LABEL : longueur max du libelle ASCII transmis.
+ * LTARF fait 16 caracteres en TIC Standard, PTEC 4 en Historique. */
+#define LORA_TIC_TARIFF_LABEL_MAX_LEN 16
+#define LORA_TIC_EXT_TARIFF_HDR_SIZE  6   /* type+seq+subtype+mode+tarif+len */
+
+/* METER_SERIAL : numero de serie du compteur, 12 caracteres ASCII.
+ * ADSC (Standard) et ADCO (Historique) sont identiques en longueur et
+ * partagent le meme champ interne → pas de champ mode necessaire. */
+#define LORA_TIC_SERIAL_MAX_LEN       12
+#define LORA_TIC_EXT_SERIAL_HDR_SIZE  4   /* type+seq+subtype+len */
+
+/* METER_DATE : horodate du compteur, format TIC "SAAMMJJhhmmss" (13 chars).
+ *   S    = saison : 'E' ete / 'H' hiver ; minuscule ('e'/'h') = horloge en
+ *          mode degrade (non synchronisee) ; espace = inconnue
+ *   AA   = annee (2 chiffres), MM mois, JJ jour, hh:mm:ss heure
+ * Etiquette presente en TIC Standard uniquement (absente en Historique). */
+#define LORA_TIC_DATE_MAX_LEN         13
+#define LORA_TIC_EXT_DATE_HDR_SIZE    4   /* type+seq+subtype+len */
+
+/* TARIFF_OPTION : longueurs des champs ASCII a disposition fixe.
+ *   OPTARIF (Historique) : "BASE", "HC..", "EJP.", "BBR(" — 4 chars
+ *   DEMAIN  (Histo Tempo): "BLEU", "BLAN", "ROUG", "----" — 4 chars */
+#define LORA_TIC_OPTARIF_LEN          4
+#define LORA_TIC_DEMAIN_LEN           4
 
 /****************************************************************************/
 /***        Type Definitions                                              ***/
@@ -150,6 +219,30 @@ PUBLIC void APP_vLoRaTicSetReady(bool_t bReady);
  *        pour ne pas bloquer les autres timers pendant l'acquisition TIC.
  */
 PUBLIC void APP_vLoRaTicPollTx(void);
+
+/**
+ * @brief Transmet un paquet brut LoRa (deja construit) et attend TX_DONE.
+ *        N'effectue PAS de chiffrement AES, le buffer est envoye tel quel.
+ *        Reutilise par le module OTA pour envoyer ACK/STATUS apres
+ *        chiffrement par AES-CTR.
+ * @param pu8Data  Buffer prêt à envoyer (avec MIC si chiffré)
+ * @param u8Len    Taille totale en bytes
+ * @return TRUE si TX_DONE detecte, FALSE sinon
+ */
+PUBLIC bool_t APP_bLoraTicTransmitRaw(uint8 *pu8Data, uint8 u8Len);
+
+/**
+ * @brief Reset materiel du SX1280 + reconfiguration LoRa complete sur le
+ *        canal donne (packet type, modulation SF11/BW406, sync word,
+ *        packet params, TX power, IRQ TX_DONE).
+ *
+ *        A appeler par tout module qui doit emettre : la radio est alors
+ *        dans un etat connu, sans dependre de la configuration laissee par
+ *        un autre module.
+ *
+ * @param u8Channel  Index de canal 0..LORA_NUM_CHANNELS-1
+ */
+PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel);
 
 /****************************************************************************/
 /***        END OF FILE                                                   ***/

@@ -44,6 +44,7 @@
 #include "App_Linky.h"
 #include "app_lora_pair.h"
 #include "app_lora_crypt.h"
+#include "app_lora_channels.h"
 
 /* Flag HAL SPI : coupe les PRINTF pendant TX RF (defini dans sx1280_hal.c) */
 extern volatile uint8_t g_u8SX1280_HalSilent;
@@ -113,6 +114,11 @@ PRIVATE uint8 u8BuildExtVoltageStats(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtPowerMaxCfg(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtDailyEnergy(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtComplement(uint8 *pu8Buffer);
+PRIVATE uint8 u8BuildExtTariffLabel(uint8 *pu8Buffer);
+PRIVATE uint8 u8BuildExtMeterSerial(uint8 *pu8Buffer);
+PRIVATE uint8 u8BuildExtMeterDate(uint8 *pu8Buffer);
+PRIVATE uint8 u8BuildExtTariffOption(uint8 *pu8Buffer);
+PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
@@ -377,6 +383,47 @@ PRIVATE uint8 u8HexCharToNibble(uint8 u8Char)
 
 /****************************************************************************
  *
+ * NAME: u8ComputeTariffCode
+ *
+ * DESCRIPTION:
+ * Encode le tarif en cours sur 1 octet.
+ *  - Mode Standard : NTARF direct (0=inconnu, 1..10=index)
+ *  - Mode Historique : mapping du PTEC (4 chars ASCII) sur codes 0..11
+ *    (cf. constantes LORA_TARIF_* dans app_lora_tic.h)
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8ComputeTariffCode(void)
+{
+    uint8 u8Mode = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
+
+    /* Mode Standard : NTARF direct */
+    if (u8Mode & 0x01)
+    {
+        return sBaseDevice.sLinkyServerCluster.au8LinkyNTARF;
+    }
+
+    /* Mode Historique : mapping PTEC (4 chars ASCII) */
+    const uint8 *pPtec = sBaseDevice.sLinkyServerCluster.au8LinkyTarifPeriod;
+    if (pPtec[0] == 0) return LORA_TARIF_UNKNOWN;
+
+    if (memcmp(pPtec, "TH..", 4) == 0) return LORA_TARIF_HISTO_BASE;
+    if (memcmp(pPtec, "BASE", 4) == 0) return LORA_TARIF_HISTO_BASE;
+    if (memcmp(pPtec, "HP..", 4) == 0) return LORA_TARIF_HISTO_HP;
+    if (memcmp(pPtec, "HC..", 4) == 0) return LORA_TARIF_HISTO_HC;
+    if (memcmp(pPtec, "HN..", 4) == 0) return LORA_TARIF_HISTO_EJP_HN;
+    if (memcmp(pPtec, "PM..", 4) == 0) return LORA_TARIF_HISTO_EJP_PM;
+    if (memcmp(pPtec, "HCJB", 4) == 0) return LORA_TARIF_HISTO_TEMPO_BLEU_HC;
+    if (memcmp(pPtec, "HPJB", 4) == 0) return LORA_TARIF_HISTO_TEMPO_BLEU_HP;
+    if (memcmp(pPtec, "HCJW", 4) == 0) return LORA_TARIF_HISTO_TEMPO_BLANC_HC;
+    if (memcmp(pPtec, "HPJW", 4) == 0) return LORA_TARIF_HISTO_TEMPO_BLANC_HP;
+    if (memcmp(pPtec, "HCJR", 4) == 0) return LORA_TARIF_HISTO_TEMPO_ROUGE_HC;
+    if (memcmp(pPtec, "HPJR", 4) == 0) return LORA_TARIF_HISTO_TEMPO_ROUGE_HP;
+
+    return LORA_TARIF_UNKNOWN;
+}
+
+/****************************************************************************
+ *
  * NAME: vBuildEssentialPacket
  *
  * DESCRIPTION:
@@ -467,6 +514,10 @@ PRIVATE uint8 u8BuildExtendedPacket(uint8 *pu8Buffer, uint8 u8SubType)
         case LORA_TIC_EXT_POWER_MAX_CFG:   return u8BuildExtPowerMaxCfg(pu8Buffer);
         case LORA_TIC_EXT_DAILY_ENERGY:    return u8BuildExtDailyEnergy(pu8Buffer);
         case LORA_TIC_EXT_COMPLEMENT:      return u8BuildExtComplement(pu8Buffer);
+        case LORA_TIC_EXT_TARIFF_LABEL:    return u8BuildExtTariffLabel(pu8Buffer);
+        case LORA_TIC_EXT_METER_SERIAL:    return u8BuildExtMeterSerial(pu8Buffer);
+        case LORA_TIC_EXT_METER_DATE:      return u8BuildExtMeterDate(pu8Buffer);
+        case LORA_TIC_EXT_TARIFF_OPTION:   return u8BuildExtTariffOption(pu8Buffer);
         default:                           return u8BuildExtCurrentVoltage(pu8Buffer);
     }
 }
@@ -712,11 +763,13 @@ PRIVATE uint8 u8BuildExtVoltageStats(uint8 *pu8Buffer)
  *   [7-8]   SINSTI (VA, uint16) — puissance apparente instantanee
  *   [9-10]  CCAIN (VA, uint16) — point courbe charge
  *   [11-12] RELAIS (uint16)
- *   [13]    NTARF (uint8) — numero tarif en cours
+ *   [13]    NTARF (uint8) — numero tarif en cours (Standard uniquement)
  *   [14]    PCOUP (kVA, uint8) — seuil de coupure
  *   [15]    PREF (kVA, uint8) — puissance de reference
  *   [16]    mode (uint8) — au8LinkyMode
- *   [17]    reserved (0x00)
+ *   [17]    tarif unifie (cf. LORA_TARIF_* dans app_lora_tic.h)
+ *              - Standard : NTARF (0=?, 1..10=index) — redondant avec [13]
+ *              - Historique : code mappe depuis PTEC (0..11)
  *
  ****************************************************************************/
 PRIVATE uint8 u8BuildExtPowerMaxCfg(uint8 *pu8Buffer)
@@ -762,8 +815,8 @@ PRIVATE uint8 u8BuildExtPowerMaxCfg(uint8 *pu8Buffer)
     /* Mode */
     pu8Buffer[16] = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
 
-    /* Reserved */
-    pu8Buffer[17] = 0x00;
+    /* Tarif unifie (Standard = NTARF, Historique = PTEC mappe) */
+    pu8Buffer[17] = u8ComputeTariffCode();
 
     return 18;
 }
@@ -860,6 +913,284 @@ PRIVATE uint8 u8BuildExtComplement(uint8 *pu8Buffer)
 
 /****************************************************************************
  *
+ * NAME: u8BuildExtTariffLabel
+ *
+ * DESCRIPTION:
+ * Sub-type 0x07 TARIFF_LABEL (6..22 octets, taille variable) :
+ * Libelle texte du tarif en cours.
+ *
+ *   [0]     0x12 (v1, extended)
+ *   [1]     sequence
+ *   [2]     0x07 (sub_type)
+ *   [3]     mode (au8LinkyMode) — permet au recepteur d'etre autonome
+ *   [4]     code tarif (cf. LORA_TARIF_* / u8ComputeTariffCode)
+ *   [5]     longueur du libelle (N, 0..16)
+ *   [6..]   libelle ASCII (N octets, sans nul terminal, espaces de fin retires)
+ *
+ * Source : sLinkyServerCluster.au8LinkyTarifPeriod, que App_Linky.c remplit
+ * avec LTARF (16 chars) en mode Standard et PTEC (4 chars) en Historique.
+ * Le champ [3] mode indique lequel des deux est transmis.
+ *
+ * Exemples de libelles :
+ *   Standard   : "HEURE CREUSE", "HEURE PLEINE", "HC BLEU", "HP ROUGE", "BASE"
+ *   Historique : "TH..", "HC..", "HP..", "HCJB", "HPJR"
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8BuildExtTariffLabel(uint8 *pu8Buffer)
+{
+    pu8Buffer[0] = (LORA_TIC_PROTOCOL_VERSION << 4) | LORA_TIC_PKT_DATA_EXTENDED;
+    pu8Buffer[1] = u8TxSequence++;
+    pu8Buffer[2] = LORA_TIC_EXT_TARIFF_LABEL;
+    pu8Buffer[3] = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
+    pu8Buffer[4] = u8ComputeTariffCode();
+
+    /* Copie du libelle en retirant les espaces / nuls de fin.
+     * En Standard LTARF est pade a 16 avec des espaces ; en Historique
+     * PTEC fait 4 chars et le reste du buffer peut contenir du residu. */
+    const uint8 *pLabel = sBaseDevice.sLinkyServerCluster.au8LinkyTarifPeriod;
+    uint8 u8Len = 0;
+    uint8 i;
+
+    for (i = 0; i < LORA_TIC_TARIFF_LABEL_MAX_LEN; i++)
+    {
+        uint8 c = pLabel[i];
+        if (c == 0x00) break;            /* fin de chaine */
+        if (c < 0x20 || c > 0x7E) break; /* caractere non imprimable → stop */
+        pu8Buffer[LORA_TIC_EXT_TARIFF_HDR_SIZE + i] = c;
+        u8Len++;
+    }
+
+    /* Retire les espaces de fin (padding TIC) */
+    while (u8Len > 0 &&
+           pu8Buffer[LORA_TIC_EXT_TARIFF_HDR_SIZE + u8Len - 1] == ' ')
+    {
+        u8Len--;
+    }
+
+    pu8Buffer[5] = u8Len;
+
+    return LORA_TIC_EXT_TARIFF_HDR_SIZE + u8Len;
+}
+
+/****************************************************************************
+ *
+ * NAME: u8BuildExtMeterSerial
+ *
+ * DESCRIPTION:
+ * Sub-type 0x08 METER_SERIAL (4..16 octets, taille variable) :
+ * Numero de serie du compteur.
+ *
+ *   [0]     0x12 (v1, extended)
+ *   [1]     sequence
+ *   [2]     0x08 (sub_type)
+ *   [3]     longueur du numero (N, 0..12)
+ *   [4..]   numero de serie ASCII (N octets, sans nul terminal)
+ *
+ * Source : sSimpleMeteringServerCluster.sMeterSerialNumber, que App_Linky.c
+ * remplit avec ADSC (Standard) ou ADCO (Historique) — memes 12 caracteres
+ * dans les deux modes, d'ou l'absence de champ mode ici.
+ *
+ * Exemple : "021761234567"
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8BuildExtMeterSerial(uint8 *pu8Buffer)
+{
+    pu8Buffer[0] = (LORA_TIC_PROTOCOL_VERSION << 4) | LORA_TIC_PKT_DATA_EXTENDED;
+    pu8Buffer[1] = u8TxSequence++;
+    pu8Buffer[2] = LORA_TIC_EXT_METER_SERIAL;
+
+    const uint8 *pSerial = sBaseDevice.sSimpleMeteringServerCluster.sMeterSerialNumber.pu8Data;
+    uint8 u8Len = 0;
+    uint8 i;
+
+    for (i = 0; i < LORA_TIC_SERIAL_MAX_LEN; i++)
+    {
+        uint8 c = pSerial[i];
+        if (c == 0x00) break;            /* fin de chaine */
+        if (c < 0x20 || c > 0x7E) break; /* caractere non imprimable → stop */
+        pu8Buffer[LORA_TIC_EXT_SERIAL_HDR_SIZE + i] = c;
+        u8Len++;
+    }
+
+    /* Retire les espaces de fin (padding TIC) */
+    while (u8Len > 0 &&
+           pu8Buffer[LORA_TIC_EXT_SERIAL_HDR_SIZE + u8Len - 1] == ' ')
+    {
+        u8Len--;
+    }
+
+    pu8Buffer[3] = u8Len;
+
+    return LORA_TIC_EXT_SERIAL_HDR_SIZE + u8Len;
+}
+
+/****************************************************************************
+ *
+ * NAME: u8BuildExtMeterDate
+ *
+ * DESCRIPTION:
+ * Sub-type 0x09 METER_DATE (4..17 octets, taille variable) :
+ * Horodate interne du compteur.
+ *
+ *   [0]     0x12 (v1, extended)
+ *   [1]     sequence
+ *   [2]     0x09 (sub_type)
+ *   [3]     longueur de l'horodate (N, 0..13)
+ *   [4..]   horodate ASCII "SAAMMJJhhmmss" (N octets, sans nul terminal)
+ *
+ * Source : sLinkyServerCluster.au8LinkyDATE, rempli par App_Linky.c depuis
+ * l'etiquette DATE. Le parser TIC (app_uartlinky.c) a un cas special qui
+ * recopie l'horodate dans le champ valeur pour cette etiquette.
+ *
+ * Etiquette Standard uniquement : en Historique le champ reste vide et
+ * u8Len vaut 0 — le recepteur peut alors ignorer le paquet.
+ *
+ * Le premier caractere porte la saison ET l'etat de l'horloge :
+ *   'E'/'H' = ete/hiver, horloge synchronisee
+ *   'e'/'h' = ete/hiver, horloge en mode degrade (non synchronisee)
+ *   ' '     = saison inconnue
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8BuildExtMeterDate(uint8 *pu8Buffer)
+{
+    pu8Buffer[0] = (LORA_TIC_PROTOCOL_VERSION << 4) | LORA_TIC_PKT_DATA_EXTENDED;
+    pu8Buffer[1] = u8TxSequence++;
+    pu8Buffer[2] = LORA_TIC_EXT_METER_DATE;
+
+    const uint8 *pDate = sBaseDevice.sLinkyServerCluster.au8LinkyDATE;
+    uint8 u8Len = 0;
+    uint8 i;
+
+    for (i = 0; i < LORA_TIC_DATE_MAX_LEN; i++)
+    {
+        uint8 c = pDate[i];
+        if (c == 0x00) break;            /* fin de chaine */
+        if (c < 0x20 || c > 0x7E) break; /* caractere non imprimable → stop */
+        pu8Buffer[LORA_TIC_EXT_DATE_HDR_SIZE + i] = c;
+        u8Len++;
+    }
+
+    /* Retire les espaces de fin. Attention : on ne touche PAS au premier
+     * caractere, un espace en tete est une saison "inconnue" significative. */
+    while (u8Len > 1 &&
+           pu8Buffer[LORA_TIC_EXT_DATE_HDR_SIZE + u8Len - 1] == ' ')
+    {
+        u8Len--;
+    }
+
+    pu8Buffer[3] = u8Len;
+
+    return LORA_TIC_EXT_DATE_HDR_SIZE + u8Len;
+}
+
+/****************************************************************************
+ *
+ * NAME: vCopyAsciiField
+ *
+ * DESCRIPTION:
+ * Recopie u8Len caracteres ASCII imprimables depuis pu8Src vers pu8Dst.
+ * Les caracteres non imprimables (et tout ce qui suit) sont remplaces par
+ * 0x00 : le recepteur distingue ainsi un champ absent d'un champ valide.
+ *
+ ****************************************************************************/
+PRIVATE void vCopyAsciiField(uint8 *pu8Dst, const uint8 *pu8Src, uint8 u8Len)
+{
+    uint8 i;
+    bool_t bEnded = FALSE;
+
+    for (i = 0; i < u8Len; i++)
+    {
+        uint8 c = pu8Src[i];
+        if (bEnded || c < 0x20 || c > 0x7E)
+        {
+            bEnded = TRUE;
+            pu8Dst[i] = 0x00;
+        }
+        else
+        {
+            pu8Dst[i] = c;
+        }
+    }
+}
+
+/****************************************************************************
+ *
+ * NAME: u8BuildExtTariffOption
+ *
+ * DESCRIPTION:
+ * Sub-type 0x0A TARIFF_OPTION (16 octets) :
+ * Option tarifaire souscrite, couleur du lendemain, courbe de charge soutiree.
+ *
+ *   [0]     0x12 (v1, extended)
+ *   [1]     sequence
+ *   [2]     0x0A (sub_type)
+ *   [3]     mode (au8LinkyMode) — indique quels champs sont pertinents
+ *   [4-7]   OPTARIF (4 ASCII) — Historique ; 0x00 en Standard
+ *   [8-11]  DEMAIN  (4 ASCII) — Historique Tempo ; 0x00 sinon
+ *   [12-13] CCASN   (int16 BE, VA) — Standard ; 0 en Historique
+ *   [14-15] CCASN-1 (int16 BE, VA) — Standard ; 0 en Historique
+ *
+ * Les deux moities sont mutuellement exclusives selon le mode, d'ou leur
+ * regroupement dans un seul paquet.
+ *
+ * NOTE OPTARIF : le champ interne au8LinkyOptarif porte OPTARIF (4 chars)
+ * en Historique mais NGTF (nom du calendrier fournisseur, 16 chars) en
+ * Standard. On ne transmet donc ce champ QU'EN Historique — envoyer ses
+ * 4 premiers caracteres en Standard donnerait un NGTF tronque, trompeur.
+ *
+ * NOTE CCASN : contrepartie "soutiree" de CCAIN (courbe de charge injectee),
+ * qui est deja transmis dans POWER_MAX_CFG [9-10].
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8BuildExtTariffOption(uint8 *pu8Buffer)
+{
+    uint8 u8Mode = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
+    bool_t bStandard = (u8Mode & 0x01) != 0;
+
+    pu8Buffer[0] = (LORA_TIC_PROTOCOL_VERSION << 4) | LORA_TIC_PKT_DATA_EXTENDED;
+    pu8Buffer[1] = u8TxSequence++;
+    pu8Buffer[2] = LORA_TIC_EXT_TARIFF_OPTION;
+    pu8Buffer[3] = u8Mode;
+
+    /* OPTARIF — Historique uniquement (cf. note ci-dessus) */
+    if (!bStandard)
+    {
+        vCopyAsciiField(&pu8Buffer[4],
+                        sBaseDevice.sLinkyServerCluster.au8LinkyOptarif,
+                        LORA_TIC_OPTARIF_LEN);
+    }
+    else
+    {
+        memset(&pu8Buffer[4], 0, LORA_TIC_OPTARIF_LEN);
+    }
+
+    /* DEMAIN — couleur Tempo du lendemain, Historique uniquement */
+    if (!bStandard)
+    {
+        vCopyAsciiField(&pu8Buffer[8],
+                        sBaseDevice.sLinkyServerCluster.au8LinkyDemain,
+                        LORA_TIC_DEMAIN_LEN);
+    }
+    else
+    {
+        memset(&pu8Buffer[8], 0, LORA_TIC_DEMAIN_LEN);
+    }
+
+    /* CCASN — point courant de la courbe de charge soutiree (Standard) */
+    int16 i16Val = sBaseDevice.sElectricalMeasurement.i16ActivePower;
+    pu8Buffer[12] = (uint8)(((uint16)i16Val) >> 8);
+    pu8Buffer[13] = (uint8)(((uint16)i16Val) & 0xFF);
+
+    /* CCASN-1 — point precedent de la courbe de charge soutiree (Standard) */
+    i16Val = sBaseDevice.sElectricalMeasurement.i16ActivePowerPhB;
+    pu8Buffer[14] = (uint8)(((uint16)i16Val) >> 8);
+    pu8Buffer[15] = (uint8)(((uint16)i16Val) & 0xFF);
+
+    return 16;
+}
+
+/****************************************************************************
+ *
  * NAME: vReconfigureLoRaForTx
  *
  * DESCRIPTION:
@@ -869,7 +1200,29 @@ PRIVATE uint8 u8BuildExtComplement(uint8 *pu8Buffer)
  ****************************************************************************/
 PRIVATE void vReconfigureLoRaForTx(void)
 {
-    DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: HW Reset + Calibrate + full reconfig...\r\n");
+    /* Canal operationnel (PAIR_CHANNEL si pas appaire, OP_CHANNEL sinon) */
+    APP_vLoRaTicReconfigureRadio(APP_u8LoraPairGetOpChannel());
+}
+
+/****************************************************************************
+ *
+ * NAME: APP_vLoRaTicReconfigureRadio
+ *
+ * DESCRIPTION:
+ * Reset materiel du SX1280 + configuration LoRa COMPLETE sur le canal donne.
+ *
+ * Publique car le module pairing en a besoin : sans reconfig complete, le
+ * chemin d'appairage dependrait de l'etat laisse par un autre module (au boot
+ * c'est app_start.c, apres un appui long c'est le dernier TX TIC). Cette
+ * dependance implicite rendait l'appairage par bouton non fonctionnel tant
+ * qu'on n'avait pas power-cycle le module.
+ *
+ ****************************************************************************/
+PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel)
+{
+    DBG_vPrintf(TRACE_LORA_TIC,
+                "LORA_TIC: HW Reset + Calibrate + full reconfig (ch %d)...\r\n",
+                u8Channel);
 
     /* ====== HW Reset + Calibrate ======
      * Le TCXOEN est cable directement au 3.3V (pas sur un GPIO),
@@ -929,17 +1282,19 @@ PRIVATE void vReconfigureLoRaForTx(void)
         SX1280_HAL_WriteCommand(0x88, &cadParam, 1);
     }
 
-    /* 6) Regulator LDO */
-    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
+    /* 6) Regulator DC-DC (proto custom : L3 15uH presente sur le PCB) */
+    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
 
-    /* 7) Frequence 2490 MHz + delai PLL settling */
-    SX1280_SetRfFrequency(2490000000UL);
-    for (volatile uint32 i = 0; i < 24000; i++);  /* 2ms PLL */
+    /* 7) Frequence : canal demande par l'appelant */
+    APP_vLoraChannelSet(u8Channel);
+    for (volatile uint32 i = 0; i < 24000; i++);  /* 2ms PLL settling */
 
-    /* 8) Modulation SF10/BW406/CR4_5 + mandatory registers */
+    /* 8) Modulation SF11/BW406/CR4_5 + mandatory registers
+     *    SF11 = +3 dB sensibilite vs SF10, 2x airtime.
+     *    Compromis raisonnable entre portee et stabilite alim. */
     {
         SX1280_LoRaModParams_t modParams;
-        modParams.spreadingFactor = SX1280_LORA_SF10;
+        modParams.spreadingFactor = SX1280_LORA_SF11;
         modParams.bandwidth       = SX1280_LORA_BW_406;
         modParams.codingRate      = SX1280_LORA_CR_4_5;
         SX1280_SetModulationParams(&modParams);
@@ -964,7 +1319,7 @@ PRIVATE void vReconfigureLoRaForTx(void)
     }
 
     /* 11) TX Power +10 dBm, ramp 20us */
-    SX1280_SetTxParams(10, SX1280_RAMP_20_US);
+    SX1280_SetTxParams(13, SX1280_RAMP_20_US);  /* +13 dBm (max chip) - test stabilite */
 
     /* 12) IRQ : TX_DONE + TIMEOUT sur DIO1 */
     SX1280_SetDioIrqParams(
@@ -1011,6 +1366,13 @@ PRIVATE void vReconfigureLoRaForTx(void)
  * TRUE si TX complete, FALSE si timeout ou erreur.
  *
  ****************************************************************************/
+/* Public wrapper pour le module OTA et autres consumers externes.
+ * Le buffer doit deja etre construit (et chiffre si besoin). */
+PUBLIC bool_t APP_bLoraTicTransmitRaw(uint8 *pu8Data, uint8 u8Len)
+{
+    return bTransmitAndWait(pu8Data, u8Len);
+}
+
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
 {
     /* ===== Initialiser le compteur de cycles DWT ===== */
