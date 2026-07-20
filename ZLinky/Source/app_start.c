@@ -209,9 +209,9 @@ static void ConfigureLoRa(void)
 	    SX1280_SetPacketParams(&packetParams);
 	    PRINTF("Packet Params OK (preamble=0x18=16sym, explicit, CRC=0x20, IQ=0x40)\r\n");
 
-	    // 9) TX Power : +10 dBm (max EU ETSI EN 300 328 = +10 dBm EIRP)
-	    SX1280_SetTxParams(13, SX1280_RAMP_20_US);  /* +13 dBm (max) - test stabilite */
-	    PRINTF("TX Params OK (power=+10dBm EU, ramp=20us)\r\n");
+	    // 9) TX Power : limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM
+	    SX1280_SetTxParams(LORA_TIC_TX_POWER_DBM, SX1280_RAMP_20_US);
+	    PRINTF("TX Params OK (power=+%ddBm EU, ramp=20us)\r\n", LORA_TIC_TX_POWER_DBM);
 
 	    // 10) IRQ : TX_DONE + RX_TX_TIMEOUT sur DIO1
 	    SX1280_SetDioIrqParams(

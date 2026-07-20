@@ -778,8 +778,18 @@ PRIVATE uint8 u8BuildExtPowerMaxCfg(uint8 *pu8Buffer)
     pu8Buffer[1] = u8TxSequence++;
     pu8Buffer[2] = LORA_TIC_EXT_POWER_MAX_CFG;
 
-    /* SMAXSN — puissance max soutiree du jour */
-    uint16 u16Val = sBaseDevice.sLinkyServerCluster.u16LinkySMAXSN_1;
+    /* SMAXSN — puissance max soutiree du JOUR.
+     * Source : i32TotalActivePower, seul champ ecrit exclusivement par
+     * l'etiquette SMAXSN (mono et tri). i16ActivePowerMax est ambigu :
+     * il porte aussi SMAXSN1 en Standard et PMAX en Historique.
+     * u16LinkySMAXSN_1 porte SMAXSN-1, c.a.d. la VEILLE. */
+    uint16 u16Val;
+    {
+        int32 i32Smaxsn = sBaseDevice.sElectricalMeasurement.i32TotalActivePower;
+        if (i32Smaxsn < 0)          i32Smaxsn = 0;
+        if (i32Smaxsn > 65535)      i32Smaxsn = 65535;
+        u16Val = (uint16)i32Smaxsn;
+    }
     pu8Buffer[3] = (uint8)(u16Val >> 8);
     pu8Buffer[4] = (uint8)(u16Val & 0xFF);
 
@@ -1319,7 +1329,9 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel)
     }
 
     /* 11) TX Power +10 dBm, ramp 20us */
-    SX1280_SetTxParams(13, SX1280_RAMP_20_US);  /* +13 dBm (max chip) - test stabilite */
+    /* +10 dBm : limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM.
+     * Le SX1280 monte a +13 dBm mais ce serait hors conformite. */
+    SX1280_SetTxParams(LORA_TIC_TX_POWER_DBM, SX1280_RAMP_20_US);
 
     /* 12) IRQ : TX_DONE + TIMEOUT sur DIO1 */
     SX1280_SetDioIrqParams(

@@ -32,6 +32,12 @@
  * Cycle complet des 7 sous-types extended : ~140s (~2.5 min) */
 #define LORA_TIC_EXTENDED_INTERVAL  4
 
+/* Puissance d'emission en dBm.
+ * +10 dBm = limite reglementaire ETSI EU (EN 300 440) pour la bande
+ * 2.4 GHz ISM. Le SX1280 accepte jusqu'a +13 dBm mais ce serait hors
+ * conformite pour une commercialisation en Europe. */
+#define LORA_TIC_TX_POWER_DBM       10
+
 /* Version du protocole LoRa TIC */
 #define LORA_TIC_PROTOCOL_VERSION   0x01
 

@@ -20,7 +20,7 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | CRC | ON |
 | IQ | Normal |
 | Sync Word | registre `0x0944` = `{0x14, 0x24}` (équivalent RadioLib `setSyncWord(0x12)`) |
-| TX Power | +13 dBm (à ramener à +10 dBm pour conformité ETSI EU) |
+| TX Power | **+10 dBm** — limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM |
 | Regulator | LDO |
 
 ### Plan de fréquences (8 canaux)
@@ -352,7 +352,7 @@ Hors Tempo (mode Historique), ces 4 champs sont **sans signification**.
 
 | Offset | Taille | Champ | Standard | Historique |
 |---|---|---|---|---|
-| 3-4 | 2 | Puissance max soutirée jour (VA, uint16 BE) | `SMAXSN` | *(voir note)* |
+| 3-4 | 2 | Puissance max soutirée **du jour** (VA, uint16 BE) | `SMAXSN` | *(voir note)* |
 | 5-6 | 2 | Puissance max injectée jour (VA, uint16 BE) | `SMAXIN` | 0 (absent) |
 | 7-8 | 2 | Puissance apparente injectée (VA, uint16 BE) | `SINSTI` | 0 (absent) |
 | 9-10 | 2 | Point courbe de charge injectée (VA, uint16 BE) | `CCAIN` | 0 (absent) |
@@ -363,8 +363,8 @@ Hors Tempo (mode Historique), ces 4 champs sont **sans signification**.
 | 16 | 1 | **mode Linky** (même encodage que §6.1) | | |
 | 17 | 1 | **code tarif unifié** (voir §7.5.1) | | |
 
-> ⚠️ **Bug connu** : le champ [3-4] lit actuellement `SMAXSN-1` (veille) au lieu
-> de `SMAXSN` (jour). À corriger côté émetteur.
+> `SMAXSN` est la puissance max soutirée **du jour en cours**. La valeur de la
+> veille (`SMAXSN-1`) n'est pas transmise.
 
 #### 7.5.1 Code tarif unifié (byte 17)
 
