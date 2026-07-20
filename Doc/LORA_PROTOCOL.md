@@ -208,7 +208,7 @@ le device connaît bien la clé → appairage validé.
 
 | Élément | Période |
 |---|---|
-| DATA_ESSENTIAL | **toutes les 5 s** |
+| DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, pilotable par downlink) |
 | DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
 | Cycle complet des 11 sous-types EXTENDED | **~220 s** (~3 min 40) |
 
@@ -216,6 +216,25 @@ Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0A
 
 Un EXTENDED est envoyé **juste après** l'ESSENTIAL correspondant (piggyback),
 en deux trames radio distinctes.
+
+### Période réelle
+
+L'intervalle est compté entre la **fin** d'un cycle et le **début** du suivant,
+et l'acquisition TIC qui précède chaque émission bloque 1 à 2 secondes. Le
+cycle observé est donc de **~6,5 à 7,5 s**, pour 250 à 500 ms d'émission
+effective : la radio est inoccupée plus de 90 % du temps.
+
+C'est ce qui rend possible la **fenêtre de réception descendante** ouverte
+après chaque TX (§8), sans peser sur le budget d'alimentation.
+
+```
+│◀────────────── ~7 s ──────────────▶│
+├──────────┬─────┬────┬──────────────┤
+│ TIC 1-2s │ TX  │ RX │   standby    │
+│          │250ms│300 │              │
+                   ▲
+                   └─ fenêtre downlink
+```
 
 ---
 
@@ -567,7 +586,7 @@ le distingue sans ambiguïté d'une valeur réelle.
 > champ interne porte `OPTARIF` (4 car.) en Historique mais `NGTF` (nom du
 > calendrier tarifaire fournisseur, 16 car.) en Standard. Transmettre ses
 > 4 premiers caractères en Standard donnerait un `NGTF` tronqué et trompeur.
-> `NGTF` reste donc non transmis (cf. §8).
+> `NGTF` reste donc non transmis (cf. §9).
 
 > **`CCASN` et `CCAIN`** : `CCAIN` (courbe de charge **injectée**) est déjà
 > transmis dans POWER_MAX_CFG [9-10] (§7.5). `CCASN` est sa contrepartie
@@ -585,7 +604,7 @@ type
 
 ---
 
-## 7bis. Canal de commande descendant
+## 8. Canal de commande descendant (bidirectionnel)
 
 Le récepteur peut envoyer des commandes au ZLinky (changement de canal, de SF,
 d'intervalle, passage en OTA). Modèle **Class A façon LoRaWAN**.
@@ -698,7 +717,7 @@ appairages existants survivent donc à la mise à jour.
 
 ---
 
-## 8. Étiquettes TIC non transmises
+## 9. Étiquettes TIC non transmises
 
 Pour information, ces étiquettes sont parsées par l'émetteur mais **ne sont pas
 encore envoyées** en LoRa :
@@ -711,7 +730,7 @@ encore envoyées** en LoRa :
 
 ---
 
-## 9. OTA (mise à jour firmware)
+## 10. OTA (mise à jour firmware)
 
 Voir `Tools/OTA_README.md` pour la procédure complète.
 
@@ -794,7 +813,9 @@ qu'il attend → la gateway doit reprendre à cet index.
 
 ---
 
-## 10. Recommandations d'implémentation côté récepteur
+## 11. Recommandations d’implémentation côté récepteur
+
+### 11.1 Réception des données (montée)
 
 1. **Mémoriser `mode` et `code tarif` par émetteur.** Les paquets EXTENDED
    (hors POWER_MAX_CFG et TARIFF_LABEL) ne portent pas le mode. Sans cette
@@ -805,6 +826,7 @@ qu'il attend → la gateway doit reprendre à cet index.
    `EAIT`/`SMAXIN`/`SINSTI`/`CCAIN`/`URMS*`/`UMOY*` en Historique, tiers 3-6 hors Tempo.
 
 3. **Attention aux unités** : courants en mA (Standard) vs A (Historique).
+   `CCASN`/`CCASN-1` sont **signés** (int16), contrairement aux autres puissances.
 
 4. **Multi-émetteur** : essayer chaque clé connue au déchiffrement. Le MIC sert
    de discriminant — si aucune clé ne valide, jeter silencieusement (c'est du
@@ -813,6 +835,77 @@ qu'il attend → la gateway doit reprendre à cet index.
 5. **Suivi de séquence par émetteur** (pas de compteur global) pour calculer un
    PDR correct.
 
-6. **Avant le premier POWER_MAX_CFG** (~2 min après le boot), l'option tarifaire
+6. **Avant le premier POWER_MAX_CFG** (~3 min après le boot), l'option tarifaire
    Historique est inconnue : afficher des libellés génériques (`Tier1`, `Tier2`)
    plutôt que de masquer la donnée.
+
+### 11.2 Envoi de commandes (descente)
+
+C'est la partie à ajouter pour le bidirectionnel. Elle repose entièrement sur
+la fenêtre de 300 ms qui suit chaque uplink (§8).
+
+#### Ce qu'il faut mettre en place
+
+**Une file de commandes par émetteur.** Le récepteur ne choisit pas quand il
+émet : il doit attendre d'avoir entendu un uplink de l'émetteur visé. Une
+commande déposée par l'utilisateur reste donc en attente jusqu'au prochain
+uplink de ce ZLinky, soit jusqu'à ~7 s (ou plus si l'intervalle a été allongé).
+
+**Un compteur monotone persisté, par émetteur.** Il alimente le champ
+`compteur` du DOWNLINK_CMD. Il doit être stocké en dur (EEPROM/flash) : s'il
+repartait de 0 après un redémarrage du récepteur, toutes ses commandes seraient
+rejetées en `BAD_COUNTER` jusqu'à rattraper la valeur connue du ZLinky.
+
+**Émettre immédiatement après le RX_DONE de l'uplink.** Le budget est de
+300 ms, dont ~60 ms consommés par la détection de préambule côté ZLinky. Il
+reste largement de quoi déchiffrer, consulter la file et démarrer le TX, mais
+il ne faut pas insérer de traitement lourd entre les deux (écriture disque,
+publication MQTT, log verbeux…).
+
+#### Boucle type
+
+```
+sur RX_DONE d'un uplink de l'émetteur N :
+    déchiffrer, vérifier le MIC
+    publier la donnée                     ← peut être fait après
+    si file[N] non vide :
+        cmd = file[N].tête
+        cmd.compteur = ++compteur[N]      ← persister
+        chiffrer avec la clé de N
+        transmettre immédiatement
+        passer en RX, attendre le DOWNLINK_ACK (~500 ms)
+```
+
+#### Séquence de changement de config
+
+Le point délicat : **après un `SET_CHANNEL` ou un `SET_SF`, le ZLinky répond
+sur la NOUVELLE config.** Le récepteur doit basculer pour entendre l'ACK.
+
+```
+1. box     émet SET_CHANNEL(7) sur l'ancien canal
+2. box     bascule immédiatement sur le canal 7
+3. box     attend le DOWNLINK_ACK(PENDING_CONFIRM) sur le canal 7
+4a. reçu     → envoyer CONFIRM au prochain uplink, la config est acquise
+4b. rien     → ne rien faire : le ZLinky restaure seul l'ancienne config
+                au bout de 60 s. Revenir sur l'ancien canal et l'y attendre.
+```
+
+Ne **jamais** considérer un changement comme acquis sans avoir reçu l'ACK sur
+la nouvelle config. Le mécanisme de retour arrière du ZLinky suppose que le
+récepteur joue le jeu : s'il persiste le nouveau canal de son côté sans
+confirmation, les deux se retrouveront désynchronisés après le rollback.
+
+Pour `SET_TX_INTERVAL`, le ZLinky répond sur le même canal — pas de bascule,
+mais le `CONFIRM` reste obligatoire, sinon l'intervalle revient à sa valeur
+précédente au bout de 60 s.
+
+#### Points d'attention
+
+| Sujet | À retenir |
+|---|---|
+| Latence | une commande attend le prochain uplink, ~7 s typiquement |
+| `BAD_COUNTER` | le compteur du récepteur a régressé — le resynchroniser au-dessus de la valeur connue du ZLinky |
+| `NOTHING_PENDING` | `CONFIRM` envoyé alors que rien n'était en attente, ou envoyé plus de 60 s après |
+| Perte de l'ACK | la commande a peut-être été appliquée quand même ; ne pas la rejouer telle quelle, le compteur serait rejeté. Réémettre avec un compteur incrémenté |
+| `ENTER_OTA` | pas de retour arrière ; le ZLinky bascule et ne répond plus aux commandes normales |
+| Multi-émetteur | les fenêtres des différents ZLinky ne sont pas synchronisées, chacune se traite indépendamment |
