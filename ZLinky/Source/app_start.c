@@ -130,9 +130,9 @@ static void ConfigureLoRa(void)
 	     *   - Alimentation : 1.8-3.7V
 	     *
 	     * Parametres LoRa :
-	     *   Frequence  = 2490.0 MHz (au-dessus du WiFi ch13)
+	     *   Frequence  = canal ISM 2410-2480 MHz (cf. app_lora_channels.h)
 	     *   Bandwidth  = 406.25 kHz  -> SX1280_LORA_BW_406 (0x26)
-	     *   SF         = 10          -> SX1280_LORA_SF10 (0xA0)
+	     *   SF         = 11          -> SX1280_LORA_SF11 (0xB0)
 	     *   CR         = 4/5         -> SX1280_LORA_CR_4_5 (0x01)
 	     *   Preamble   = 16
 	     *   Header     = Explicit    -> 0x00
@@ -234,7 +234,7 @@ void ReadSX1280Config(void)
 
     // Modulation Params
     SX1280_HAL_ReadRegisters(0x088B, reg, 3);
-    PRINTF("ModParams (0x088B): SF=0x%02X(expect 0xA0=SF10) BW=0x%02X(expect 0x26=BW406) CR=0x%02X(expect 0x01=CR4/5)\r\n",
+    PRINTF("ModParams (0x088B): SF=0x%02X(expect 0xB0=SF11) BW=0x%02X(expect 0x26=BW406) CR=0x%02X(expect 0x01=CR4/5)\r\n",
            reg[0], reg[1], reg[2]);
 
     // TX Params
@@ -244,7 +244,7 @@ void ReadSX1280Config(void)
 
     // Registre SF config (ecrit apres SetModulationParams)
     SX1280_HAL_ReadRegisters(0x0925, reg, 1);
-    PRINTF("SF_Config (0x0925): 0x%02X (expect 0x32 for SF10)\r\n", reg[0]);
+    PRINTF("SF_Config (0x0925): 0x%02X (expect 0x32 for SF9-SF12)\r\n", reg[0]);
 
     // Registre freq error correction
     SX1280_HAL_ReadRegisters(0x093C, reg, 1);
@@ -503,7 +503,7 @@ PRIVATE void APP_vInitialise(void)
                 uint8_t reg0925 = 0, reg093C = 0;
                 SX1280_HAL_ReadRegisters(0x0925, &reg0925, 1);
                 SX1280_HAL_ReadRegisters(0x093C, &reg093C, 1);
-                PRINTF("Verify: Reg0x0925=0x%02X (expect 0x32 for SF10), Reg0x093C=0x%02X (expect bit0=1)\r\n",
+                PRINTF("Verify: Reg0x0925=0x%02X (expect 0x32 for SF9-SF12), Reg0x093C=0x%02X (expect bit0=1)\r\n",
                        reg0925, reg093C);
             }
 
@@ -609,7 +609,7 @@ PRIVATE void APP_vInitialise(void)
             APP_vLoRaTicSetReady(TRUE);
 
             PRINTF("\n==============================================\r\n");
-            PRINTF("=== LoRa READY (SF10/BW406/CR4_5, +10dBm) ===\r\n");
+            PRINTF("=== LoRa READY (SF11/BW406/CR4_5, +10dBm) ===\r\n");
             PRINTF("=== Entering cooperative main loop...      ===\r\n");
             PRINTF("==============================================\r\n");
         }

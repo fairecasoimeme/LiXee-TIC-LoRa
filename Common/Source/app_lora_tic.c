@@ -16,7 +16,7 @@
  *                     EXTENDED (15-19B) en piggyback toutes les 10s :
  *                       6 sous-types en round-robin, cycle complet ~60s
  *
- *                     Max 20 octets par paquet (contrainte SF10).
+ *                     Max 22 octets par paquet.
  *
  ****************************************************************************/
 
@@ -65,7 +65,7 @@ extern volatile uint8_t g_u8SX1280_HalSilent;
 /* LED sur PIO10 */
 #define LORA_LED_PIN        10
 
-/* Timeout TX en ms (SF10/BW406/20B ~100-150ms airtime, on met 500ms)
+/* Timeout TX en ms (SF11/BW406/22B ~250ms airtime, on met 500ms)
  * Le SX1280 a son propre timeout a 10s (SetTx 0x2710@1ms) */
 #define LORA_TX_TIMEOUT_MS      500
 

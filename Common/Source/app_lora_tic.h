@@ -8,7 +8,7 @@
  *                     via SX1280 2.4GHz LoRa
  *
  *                     Uniquement des etiquettes TIC brutes (pas de valeurs
- *                     calculees). Max 20 octets par paquet (SF10).
+ *                     calculees). Max 22 octets par paquet.
  *
  ****************************************************************************/
 
@@ -29,7 +29,7 @@
 
 /* Nombre d'ESSENTIAL entre chaque EXTENDED piggyback
  * Avec 1 essential/5s x 4 = 1 extended toutes les 20s
- * Cycle complet des 7 sous-types extended : ~140s (~2.5 min) */
+ * Cycle complet des 11 sous-types extended : ~220s (~3 min 40) */
 #define LORA_TIC_EXTENDED_INTERVAL  4
 
 /* Puissance d'emission en dBm.
@@ -89,7 +89,7 @@
 #define LORA_TARIF_HISTO_TEMPO_ROUGE_HC  10
 #define LORA_TARIF_HISTO_TEMPO_ROUGE_HP  11
 
-/* Sous-types DATA_EXTENDED (8 sous-types, cycle complet ~160s) */
+/* Sous-types DATA_EXTENDED (11 sous-types, cycle complet ~220s) */
 #define LORA_TIC_EXT_CURRENT_VOLTAGE  0x00  /* IRMS1/2/3 + URMS1/2/3 (15B) */
 #define LORA_TIC_EXT_ENERGY           0x01  /* EAST + EAIT + EASF01 + EASF02 (19B) */
 #define LORA_TIC_EXT_ENERGY_2         0x02  /* EASF03 + EASF04 + EASF05 + EASF06 (19B) */
@@ -157,11 +157,11 @@
  */
 
 /*
- * Format paquet DATA_EXTENDED (taille variable, max 19B) :
+ * Format paquet DATA_EXTENDED (taille variable, max 22B) :
  *
  * [0]     version_type   : bits[7:4]=version(1), bits[3:0]=type(2=extended)
  * [1]     sequence       : compteur 0-255 (partage avec essential)
- * [2]     sub_type       : identifiant du sous-type (0x00-0x05)
+ * [2]     sub_type       : identifiant du sous-type (0x00-0x0A)
  * [3+]    payload        : variable selon sub_type
  *
  * Sub-type 0x00 CURRENT_VOLTAGE (15B total) :

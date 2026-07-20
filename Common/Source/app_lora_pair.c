@@ -313,7 +313,7 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
     /* ---- PAIRING: TX/RX cycle (300ms, loops forever until paired) ---- */
     u8PairTickCount++;
 
-    /* 1) Send PAIR_REQUEST (~50ms TX time at SF10) */
+    /* 1) Send PAIR_REQUEST (~250ms TX time at SF11) */
     vSendPairRequest();
 
     /* 2) Listen for PAIR_RESPONSE (200ms) */

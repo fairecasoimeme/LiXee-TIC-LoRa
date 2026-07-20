@@ -11,9 +11,9 @@
  *
  * Apres appairage : dechiffrement AES-128-CTR + verification MIC CMAC
  *
- * Config LoRa : 2490 MHz, SF10, BW406.25, CR4/5
+ * Config LoRa : 8 canaux ISM 2410-2480 MHz, SF11, BW406.25, CR4/5
  * Preamble 16sym, CRC on, IQ normal, SyncWord 0x12
- * Max 20+2 octets par paquet (SF10 + MIC)
+ * Max 22+2 octets par paquet (payload + MIC)
  *
  * RadioLib : https://github.com/jgromes/RadioLib
  *
@@ -47,9 +47,9 @@ uint32_t totalResets = 0;
 
 #define CRC_ERROR_RESET_THRESHOLD  3
 #define PREVENTIVE_RESET_INTERVAL  50
-/* SF10 LoRa demod limit ≈ -15 dB SNR. En portée limite, le SNR est normalement
- * bas, ce n'est PAS un signe de drift. On set le seuil bien sous le demod limit
- * pour ne pas reset inutilement. Set à -100 pour effectivement desactiver. */
+/* SF11 LoRa demod limit ≈ -17.5 dB SNR. En portée limite, le SNR est
+ * normalement bas, ce n'est PAS un signe de drift. On set le seuil bien sous le
+ * demod limit pour ne pas reset inutilement. Set à -100 pour desactiver. */
 #define SNR_RESET_THRESHOLD       -25.0
 
 /* ====== Types de paquets (byte[0] & 0x0F) ====== */
@@ -1944,10 +1944,10 @@ void setup() {
   delay(2000);
 
   Serial.println(F("\r\n[RX] ZLinky TIC Receiver SX1280 (multi-channel)"));
-  Serial.println(F("[RX] 8 canaux ISM 2410-2480 MHz, SF10 BW406 CR4/5"));
-  Serial.println(F("[RX] Essential 1s + Extended piggyback 10s"));
+  Serial.println(F("[RX] 8 canaux ISM 2410-2480 MHz, SF11 BW406 CR4/5"));
+  Serial.println(F("[RX] Essential 5s + Extended piggyback 20s"));
   Serial.println(F("[RX] AES-128-CTR + CMAC MIC enabled"));
-  Serial.println(F("[RX] Max 22 octets/paquet (SF10 + MIC)\r\n"));
+  Serial.println(F("[RX] Max 22 octets/paquet + MIC\r\n"));
 
   /* Load pairing from EEPROM (sets opChannel if previously paired) */
   loadPairingFromEEPROM();
