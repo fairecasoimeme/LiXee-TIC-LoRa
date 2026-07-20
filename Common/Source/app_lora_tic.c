@@ -38,13 +38,13 @@
 #include "app_zcl_task.h"
 
 #include "sx1280.h"
-#include "app_lora_pair.h"
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
 #include "App_Linky.h"
 #include "app_lora_pair.h"
 #include "app_lora_crypt.h"
 #include "app_lora_channels.h"
+#include "app_lora_cmd.h"
 
 /* Flag HAL SPI : coupe les PRINTF pendant TX RF (defini dans sx1280_hal.c) */
 extern volatile uint8_t g_u8SX1280_HalSilent;
@@ -310,9 +310,16 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 
     /* LED geree par app_blink_led — pas de toggle TX */
 
+    /* Fenetre de reception downlink : le recepteur vient de nous entendre,
+     * c'est le moment ou il peut deposer une commande. Modele Class A. */
+    APP_vLoraCmdRxWindow();
+
     /* Relancer le timer LoRa pour le prochain cycle
-     * (intervalle = temps entre la FIN d'un TX et le DEBUT du suivant) */
-    ZTIMER_eStart(u8TimerLoRa, ZTIMER_TIME_MSEC(LORA_TX_INTERVAL_MS));
+     * (intervalle = temps entre la FIN d'un TX et le DEBUT du suivant).
+     * L'intervalle est pilotable par downlink, d'ou la relecture a chaque
+     * cycle plutot qu'une constante. */
+    ZTIMER_eStart(u8TimerLoRa,
+                  ZTIMER_TIME_MSEC(APP_u8LoraPairGetTxIntervalSec() * 1000UL));
 }
 
 /****************************************************************************
@@ -1299,12 +1306,13 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel)
     APP_vLoraChannelSet(u8Channel);
     for (volatile uint32 i = 0; i < 24000; i++);  /* 2ms PLL settling */
 
-    /* 8) Modulation SF11/BW406/CR4_5 + mandatory registers
-     *    SF11 = +3 dB sensibilite vs SF10, 2x airtime.
-     *    Compromis raisonnable entre portee et stabilite alim. */
+    /* 8) Modulation SF/BW406/CR4_5 + mandatory registers.
+     *    Le SF est pilotable par downlink (defaut SF11 : +3 dB de sensibilite
+     *    vs SF10 pour 2x l'airtime, compromis portee / stabilite alim).
+     *    Encodage SX1280 : SF7=0x70 ... SF12=0xC0, soit (SF << 4). */
     {
         SX1280_LoRaModParams_t modParams;
-        modParams.spreadingFactor = SX1280_LORA_SF11;
+        modParams.spreadingFactor = (uint8_t)(APP_u8LoraPairGetSF() << 4);
         modParams.bandwidth       = SX1280_LORA_BW_406;
         modParams.codingRate      = SX1280_LORA_CR_4_5;
         SX1280_SetModulationParams(&modParams);

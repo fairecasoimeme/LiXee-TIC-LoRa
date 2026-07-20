@@ -74,6 +74,8 @@ L'appairage se fait **toujours sur le canal 3**. Le récepteur assigne ensuite u
 | `0x08` | OTA_END | box → device | ✅ |
 | `0x09` | OTA_ACK | device → box | ✅ |
 | `0x0A` | OTA_STATUS | device → box | ✅ |
+| `0x0B` | DOWNLINK_CMD | box → device | ✅ |
+| `0x0C` | DOWNLINK_ACK | device → box | ✅ |
 
 Donc `byte[0]` vaut `0x11` pour ESSENTIAL, `0x12` pour EXTENDED, `0x13` pour
 PAIR_REQUEST, etc.
@@ -580,6 +582,119 @@ Exemple de trame (Historique Tempo, `OPTARIF = "BBR("`, `DEMAIN = "BLEU"`) :
 │  seq
 type
 ```
+
+---
+
+## 7bis. Canal de commande descendant
+
+Le récepteur peut envoyer des commandes au ZLinky (changement de canal, de SF,
+d'intervalle, passage en OTA). Modèle **Class A façon LoRaWAN**.
+
+### Principe
+
+Le ZLinky ouvre une **fenêtre de réception de 300 ms juste après chaque TX**.
+Le récepteur, qui vient de recevoir l'uplink, y dépose une commande en attente.
+
+```
+ZLinky ──── ESSENTIAL / EXTENDED ────▶ Récepteur
+       ◀─── DOWNLINK_CMD (optionnel) ─┘   dans les 300 ms
+       ──── DOWNLINK_ACK ─────────────▶
+```
+
+Chronologie dans la fenêtre :
+
+| Instant | Événement |
+|---|---|
+| T+0 | fin du TX uplink |
+| T+5 ms | ZLinky en RX (restauration IRQ DIO1 + `payloadLength`) |
+| T+20 ms | récepteur a déchiffré, consulté sa file, démarre son TX |
+| T+60 ms | préambule détecté par le ZLinky |
+| T+300 ms | fenêtre fermée, retour en standby |
+
+> **Pourquoi une fenêtre et pas une écoute permanente** : le SX1280 tire
+> ~7-10 mA en RX contre ~0,6 mA en standby. Écouter en permanence coûterait
+> ~30 mW, soit près du quart du budget TIC (130 mW). La fenêtre courte revient
+> à ~1,5 mW, soit ~1 %.
+
+### DOWNLINK_CMD — box → device (7..16 octets + MIC)
+
+| Offset | Taille | Champ |
+|---|---|---|
+| 0 | 1 | `0x1B` (version 1, type `0x0B`) |
+| 1 | 1 | seq |
+| 2 | 1 | **cmd_id** |
+| 3-6 | 4 | **compteur** (uint32 BE) — anti-rejeu |
+| 7.. | 0-9 | paramètres, selon `cmd_id` |
+
+**Le compteur doit être strictement croissant.** Toute commande dont le
+compteur est inférieur ou égal au dernier accepté est rejetée avec
+`BAD_COUNTER`. C'est la protection contre le rejeu d'une commande capturée.
+
+| `cmd_id` | Commande | Paramètres | Rollback |
+|---|---|---|---|
+| `0x00` | `PING` | — | — |
+| `0x01` | `SET_CHANNEL` | [7] canal 0..7 | ✅ 60 s |
+| `0x02` | `SET_SF` | [7] SF 7..12 | ✅ 60 s |
+| `0x03` | `SET_TX_INTERVAL` | [7-8] secondes (uint16 BE, 3..240) | ✅ 60 s |
+| `0x04` | `ENTER_OTA` | — | — |
+| `0x05` | `CONFIRM` | — | valide la config en attente |
+
+### DOWNLINK_ACK — device → box (9 octets + MIC)
+
+| Offset | Taille | Champ |
+|---|---|---|
+| 0 | 1 | `0x1C` (version 1, type `0x0C`) |
+| 1 | 1 | seq |
+| 2 | 1 | `cmd_id` acquitté |
+| 3-6 | 4 | compteur (écho) |
+| 7 | 1 | **statut** |
+| 8 | 1 | info (valeur courante, selon la commande) |
+
+| Statut | Signification |
+|---|---|
+| `0x00` | OK |
+| `0x01` | `BAD_COUNTER` — rejeu détecté |
+| `0x02` | `BAD_PARAM` — valeur hors bornes |
+| `0x03` | `UNKNOWN_CMD` |
+| `0x04` | `PENDING_CONFIRM` — appliqué, attend `CONFIRM` |
+| `0x05` | `NOTHING_PENDING` — `CONFIRM` sans config en attente |
+
+### Séquence de changement de config (avec retour arrière)
+
+Les commandes qui touchent à la liaison radio ne sont **pas persistées
+immédiatement**. Sans cela, un canal mal choisi ou une commande forgée rendrait
+le module injoignable jusqu'à intervention physique sur le compteur.
+
+```
+1. box → device   SET_CHANNEL(7)
+2. device         applique ch7, mémorise ch4, arme 60 s
+3. device → box   DOWNLINK_ACK(PENDING_CONFIRM, 7)   ← émis sur le canal 7
+4. box            bascule sur ch7, entend l'ACK
+5. box → device   CONFIRM
+6. device         annule le timer, écrit en PDM
+7. device → box   DOWNLINK_ACK(OK)
+```
+
+**Si l'étape 4 ou 5 échoue** (le récepteur n'entend rien sur le nouveau canal),
+le ZLinky restaure automatiquement l'ancienne config au bout de **60 secondes**
+et redevient joignable là où le récepteur écoute.
+
+Le point de retour est toujours la **dernière config confirmée** : deux
+commandes successives sans confirmation intermédiaire n'écrasent pas la
+sauvegarde d'origine.
+
+### Persistance de la config
+
+Les champs `SF` et `intervalle TX` sont stockés dans les 3 octets anciennement
+réservés de l'enregistrement PDM d'appairage. **La taille de la structure est
+inchangée** : un module appairé avec une version antérieure lit ces champs à 0,
+valeur invalide qui déclenche le repli sur les défauts (SF11, 5 s). Les
+appairages existants survivent donc à la mise à jour.
+
+> ⚠️ **Limite connue** : le compteur anti-rejeu n'est pas persisté. Après un
+> redémarrage du ZLinky il repart de 0, ce qui rouvre brièvement la possibilité
+> de rejouer une commande capturée, jusqu'au prochain envoi du récepteur.
+> Persister le compteur imposerait une écriture PDM par commande.
 
 ---
 

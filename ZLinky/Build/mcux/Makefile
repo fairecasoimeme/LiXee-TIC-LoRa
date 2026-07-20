@@ -370,6 +370,7 @@ APPSRC += app_lora_pair.c
 APPSRC += app_lora_crypt.c
 APPSRC += app_lora_channels.c
 APPSRC += app_lora_ota.c
+APPSRC += app_lora_cmd.c
 
 # LoRa OTA : OtaSupport NXP pour flash dual-bank (sans Zigbee OTA cluster).
 LORA_OTA ?= 1

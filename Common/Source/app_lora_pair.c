@@ -295,6 +295,76 @@ PUBLIC eLoraPairState_t APP_eLoraPairGetState(void)
 
 /****************************************************************************
  *
+ * NAME: APP_u8LoraPairGetSF / APP_u8LoraPairGetTxIntervalSec
+ *
+ * DESCRIPTION:
+ * Config radio pilotable par downlink. Un enregistrement PDM ecrit par une
+ * version anterieure porte 0 dans ces champs (ex-octets reserves) : on
+ * retombe alors sur le defaut.
+ *
+ ****************************************************************************/
+PUBLIC uint8 APP_u8LoraPairGetSF(void)
+{
+    uint8 u8SF = sPairingData.u8SpreadingFactor;
+    if (u8SF < LORA_SF_MIN || u8SF > LORA_SF_MAX)
+        return LORA_SF_DEFAULT;
+    return u8SF;
+}
+
+PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void)
+{
+    uint8 u8Sec = sPairingData.u8TxIntervalSec;
+    if (u8Sec < LORA_TX_INTERVAL_SEC_MIN || u8Sec > LORA_TX_INTERVAL_SEC_MAX)
+        return LORA_TX_INTERVAL_SEC_DEFAULT;
+    return u8Sec;
+}
+
+/****************************************************************************
+ *
+ * NAME: APP_bLoraPairSetOpChannel / SetSF / SetTxIntervalSec
+ *
+ * DESCRIPTION:
+ * Appliquent une config en RAM uniquement. Le module downlink ne persiste
+ * qu'apres confirmation du recepteur, pour pouvoir revenir en arriere si la
+ * nouvelle config coupe la liaison.
+ *
+ ****************************************************************************/
+PUBLIC bool_t APP_bLoraPairSetOpChannel(uint8 u8Channel)
+{
+    if (!APP_bLoraChannelIsValid(u8Channel))
+        return FALSE;
+    sPairingData.u8OpChannel = u8Channel;
+    return TRUE;
+}
+
+PUBLIC bool_t APP_bLoraPairSetSF(uint8 u8SF)
+{
+    if (u8SF < LORA_SF_MIN || u8SF > LORA_SF_MAX)
+        return FALSE;
+    sPairingData.u8SpreadingFactor = u8SF;
+    return TRUE;
+}
+
+PUBLIC bool_t APP_bLoraPairSetTxIntervalSec(uint8 u8Sec)
+{
+    if (u8Sec < LORA_TX_INTERVAL_SEC_MIN || u8Sec > LORA_TX_INTERVAL_SEC_MAX)
+        return FALSE;
+    sPairingData.u8TxIntervalSec = u8Sec;
+    return TRUE;
+}
+
+/****************************************************************************
+ *
+ * NAME: APP_vLoraPairSaveConfig
+ *
+ ****************************************************************************/
+PUBLIC void APP_vLoraPairSaveConfig(void)
+{
+    vSavePairingToPDM();
+}
+
+/****************************************************************************
+ *
  * NAME: APP_cbTimerLoraPair
  *
  * DESCRIPTION:

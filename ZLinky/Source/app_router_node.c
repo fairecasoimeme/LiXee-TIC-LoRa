@@ -49,6 +49,7 @@
 #include "app_lora_tic.h"
 #include "app_lora_pair.h"
 #include "app_lora_ota.h"
+#include "app_lora_cmd.h"
 #include "app_buttons.h"
 
 /****************************************************************************/
@@ -107,6 +108,9 @@ PUBLIC void APP_vInitialiseRouter(void)
 
     /* Init OTA module (etat IDLE par defaut) */
     APP_vLoraOtaInit();
+
+    /* Init canal de commande descendant (fenetre RX apres chaque TX) */
+    APP_vLoraCmdInit();
 
     /* Si bouton USERINTERFACE (PIO0) appuye au boot → mode OTA recovery.
      * Le SX1280 doit etre deja initialise par app_start.c.
