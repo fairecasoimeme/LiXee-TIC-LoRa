@@ -37,8 +37,109 @@ static uint8_t sSpiRxBuf[SX1280_SPI_BUF_SIZE];
 static void SX1280_HAL_InitPins(void);
 static void SX1280_HAL_InitSPI(void);
 
+/* ====== DIAGNOSTIC: pin-by-pin GPIO toggle test for hw debug ====== */
+/* Active ce define pour tester individuellement chaque ligne SPI au multimetre */
+#define SX1280_DIAG_PIN_TEST  0
+
+#if SX1280_DIAG_PIN_TEST
+/* Delai bloquant ~1 sec @ 12MHz CPU */
+static void SX1280_HAL_DiagDelay1s(void) {
+    for(volatile uint32_t i = 0; i < 2400000; i++);
+}
+
+static void SX1280_HAL_DiagPinTest(void)
+{
+    PRINTF("\r\n========================================\r\n");
+    PRINTF(" DIAGNOSTIC PIN TEST - mesure au chip\r\n");
+    PRINTF("========================================\r\n");
+
+    /* Activer clocks + IOCON */
+    CLOCK_EnableClock(kCLOCK_Gpio0);
+    CLOCK_EnableClock(kCLOCK_Iocon);
+    GPIO_PortInit(GPIO, SX1280_GPIO_PORT);
+
+    gpio_pin_config_t out_low  = { kGPIO_DigitalOutput, 0 };
+    gpio_pin_config_t out_high = { kGPIO_DigitalOutput, 1 };
+
+    /* Configure NSS, SCK, MOSI, RESET en GPIO output */
+    /* NSS = PIO11 (I2C-type) */
+    IOCON_PinMuxSet(IOCON, 0, SX1280_NSS_PIN,
+                    IOCON_FUNC0 | IOCON_GPIO_MODE | IOCON_DIGITAL_EN);
+    GPIO_PinInit(GPIO, 0, SX1280_NSS_PIN, &out_high);
+
+    /* RESET = PIO12 (I2C-type + dbg) */
+    IOCON_PinMuxSet(IOCON, 0, SX1280_RESET_PIN,
+                    IOCON_FUNC0 | IOCON_GPIO_MODE | IOCON_DIGITAL_EN |
+                    IOCON_INPFILT_OFF | IOCON_PIO_I2C_DBG_FUNC(0) | IOCON_PIO_I2C_DBG_MODE(0));
+    GPIO_PinInit(GPIO, 0, SX1280_RESET_PIN, &out_high);
+
+    /* SCK = PIO2 (MFIO) en GPIO */
+    IOCON_PinMuxSet(IOCON, 0, SX1280_SPI_SCK_PIN,
+                    IOCON_FUNC0 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    GPIO_PinInit(GPIO, 0, SX1280_SPI_SCK_PIN, &out_high);
+
+    /* MOSI = PIO4 (MFIO) en GPIO */
+    IOCON_PinMuxSet(IOCON, 0, SX1280_SPI_MOSI_PIN,
+                    IOCON_FUNC0 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    GPIO_PinInit(GPIO, 0, SX1280_SPI_MOSI_PIN, &out_high);
+
+    /* === Test chaque pin: HIGH 3s, LOW 3s, HIGH 3s === */
+    struct { uint32_t pin; const char* name; uint32_t chip_pin; } pins[] = {
+        { SX1280_NSS_PIN,      "NSS",   19 },
+        { SX1280_RESET_PIN,    "RESET",  3 },
+        { SX1280_SPI_SCK_PIN,  "SCK",   18 },
+        { SX1280_SPI_MOSI_PIN, "MOSI",  17 },
+    };
+
+    for(int i = 0; i < 4; i++) {
+        PRINTF("\r\n>>> [%s/PIO%d] -> chip pin %d <<<\r\n",
+               pins[i].name, pins[i].pin, pins[i].chip_pin);
+
+        PRINTF("  >> POSITIONNE LA POINTE SUR LE CHIP PIN %d MAINTENANT <<\r\n", pins[i].chip_pin);
+        PRINTF("     (5s pour se preparer...)\r\n");
+        GPIO_PinWrite(GPIO, 0, pins[i].pin, 1);
+        for(int d=0; d<5; d++) SX1280_HAL_DiagDelay1s();
+
+        PRINTF("  ETAT 1: HIGH (8s) - tu DOIS lire ~3.3V\r\n");
+        GPIO_PinWrite(GPIO, 0, pins[i].pin, 1);
+        for(int d=0; d<8; d++) SX1280_HAL_DiagDelay1s();
+
+        PRINTF("  ETAT 2: LOW  (8s) - tu DOIS lire ~0V\r\n");
+        GPIO_PinWrite(GPIO, 0, pins[i].pin, 0);
+        for(int d=0; d<8; d++) SX1280_HAL_DiagDelay1s();
+
+        PRINTF("  ETAT 3: HIGH (8s) - tu DOIS lire ~3.3V\r\n");
+        GPIO_PinWrite(GPIO, 0, pins[i].pin, 1);
+        for(int d=0; d<8; d++) SX1280_HAL_DiagDelay1s();
+    }
+
+    /* Test MISO en input: drive depuis JN5189 impossible, juste lire */
+    PRINTF("\r\n>>> [MISO/PIO%d] -> chip pin 16 <<<\r\n", SX1280_SPI_MISO_PIN);
+    IOCON_PinMuxSet(IOCON, 0, SX1280_SPI_MISO_PIN,
+                    IOCON_FUNC0 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    gpio_pin_config_t in_cfg = { kGPIO_DigitalInput, 0 };
+    GPIO_PinInit(GPIO, 0, SX1280_SPI_MISO_PIN, &in_cfg);
+    PRINTF("  PIO3 input + pull-up: mesure 3.3V au chip pin 16 (sauf si chip drive LOW)\r\n");
+    PRINTF("  GPIO_PinRead(MISO) = %d (1=line HIGH = pull-up OK ou chip drive HIGH)\r\n",
+           GPIO_PinRead(GPIO, 0, SX1280_SPI_MISO_PIN));
+    SX1280_HAL_DiagDelay1s(); SX1280_HAL_DiagDelay1s(); SX1280_HAL_DiagDelay1s();
+
+    PRINTF("\r\n========================================\r\n");
+    PRINTF(" PIN TEST DONE - normal init dans 5s\r\n");
+    PRINTF("========================================\r\n\r\n");
+    SX1280_HAL_DiagDelay1s();
+    SX1280_HAL_DiagDelay1s();
+    SX1280_HAL_DiagDelay1s();
+    SX1280_HAL_DiagDelay1s();
+    SX1280_HAL_DiagDelay1s();
+}
+#endif /* SX1280_DIAG_PIN_TEST */
+
 void SX1280_HAL_Init(void)
 {
+#if SX1280_DIAG_PIN_TEST
+    SX1280_HAL_DiagPinTest();
+#endif
     SX1280_HAL_InitPins();
     SX1280_HAL_InitSPI();
     SX1280_HAL_Reset();
@@ -159,17 +260,19 @@ static void SX1280_HAL_InitPins(void)
     PRINTF("PIO%d = TCXOEN (GPIO output, HIGH) - TCXO 52MHz alimenté\r\n", SX1280_TCXOEN_PIN);
 
     // ===== Configuration SPI0 EN DERNIER (apres GPIO_PortInit + GPIO init) =====
+    // Note JN5189 : MODE encoding inverse - 0=PULL_UP, 1=REPEATER, 2=INACTIVE, 3=PULL_DOWN
+    // MISO doit avoir pull-up actif sinon la ligne flotte quand le chip est Hi-Z
     IOCON_PinMuxSet(IOCON, SX1280_GPIO_PORT, SX1280_SPI_SCK_PIN,
-                    IOCON_FUNC1 | IOCON_MODE_INACT | IOCON_DIGITAL_EN);
-    PRINTF("PIO%d = SPI0_SCK (FUNC1)\r\n", SX1280_SPI_SCK_PIN);
+                    IOCON_FUNC1 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    PRINTF("PIO%d = SPI0_SCK (FUNC1, pull-up)\r\n", SX1280_SPI_SCK_PIN);
 
     IOCON_PinMuxSet(IOCON, SX1280_GPIO_PORT, SX1280_SPI_MISO_PIN,
-                    IOCON_FUNC1 | IOCON_MODE_INACT | IOCON_DIGITAL_EN);
-    PRINTF("PIO%d = SPI0_MISO (FUNC1)\r\n", SX1280_SPI_MISO_PIN);
+                    IOCON_FUNC1 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    PRINTF("PIO%d = SPI0_MISO (FUNC1, pull-up)\r\n", SX1280_SPI_MISO_PIN);
 
     IOCON_PinMuxSet(IOCON, SX1280_GPIO_PORT, SX1280_SPI_MOSI_PIN,
-                    IOCON_FUNC1 | IOCON_MODE_INACT | IOCON_DIGITAL_EN);
-    PRINTF("PIO%d = SPI0_MOSI (FUNC1)\r\n", SX1280_SPI_MOSI_PIN);
+                    IOCON_FUNC1 | IOCON_MODE_PULLUP | IOCON_DIGITAL_EN);
+    PRINTF("PIO%d = SPI0_MOSI (FUNC1, pull-up)\r\n", SX1280_SPI_MOSI_PIN);
 
     // === Diagnostic : lire l'etat de toutes les pins ===
     PRINTF("GPIO states: NSS(PIO%d)=%d RESET(PIO%d)=%d BUSY(PIO%d)=%d DIO1(PIO%d)=%d TCXOEN(PIO%d)=%d\r\n",

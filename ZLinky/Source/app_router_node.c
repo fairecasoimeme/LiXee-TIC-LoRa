@@ -48,6 +48,8 @@
 #include "App_Linky.h"
 #include "app_lora_tic.h"
 #include "app_lora_pair.h"
+#include "app_lora_ota.h"
+#include "app_lora_cmd.h"
 #include "app_buttons.h"
 
 /****************************************************************************/
@@ -103,6 +105,22 @@ PUBLIC void APP_vInitialiseRouter(void)
 
     /* Init pairing module (load PDM, determine state) */
     APP_vLoraPairInit();
+
+    /* Init OTA module (etat IDLE par defaut) */
+    APP_vLoraOtaInit();
+
+    /* Init canal de commande descendant (fenetre RX apres chaque TX) */
+    APP_vLoraCmdInit();
+
+    /* Si bouton USERINTERFACE (PIO0) appuye au boot → mode OTA recovery.
+     * Le SX1280 doit etre deja initialise par app_start.c.
+     * On entre dans une boucle dediee qui ne sort qu'apres reboot ou timeout. */
+    if (APP_bLoraOtaButtonHeldAtBoot() && APP_bLoraPairIsPaired())
+    {
+        DBG_vPrintf(1, "BOOT: button held → entering OTA mode\r\n");
+        APP_vLoraOtaRunListenLoop();
+        /* unreachable (reboot ou loop infinie) */
+    }
 
     /* Demarrer TIC + LoRa TX seulement si appaire */
     if (APP_bLoraPairIsPaired())

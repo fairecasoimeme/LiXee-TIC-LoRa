@@ -82,7 +82,7 @@
 #include "app_uartlinky.h"
 #include "app_blink_led.h"
 #include "app_power_on_counter.h"
-#include "app_lora_tic.h"
+#include "app_lora_cmd.h"
 #include "app_lora_pair.h"
 
 /****************************************************************************/
@@ -319,6 +319,7 @@ void main_task (uint32_t parameter)
         ZTIMER_vTask();
         APP_taskRouter();
         APP_vLoRaTicPollTx();
+        APP_vLoraCmdPollRollback();
 
 
 #ifdef WATCHDOG_ALLOWED

@@ -242,9 +242,9 @@
 &lt;family&gt;JN518x&lt;/family&gt;&#13;
 &lt;vendor&gt;NXP&lt;/vendor&gt;&#13;
 &lt;memory can_program="true" id="Flash" is_ro="true" size="640" type="Flash"/&gt;&#13;
-&lt;memory id="RAM" size="152" type="RAM"/&gt;&#13;
-&lt;memoryInstance derived_from="Flash" driver="JN5189_640K.cfx" id="PROGRAM_FLASH" location="0x00000000" size="0x000a0000"/&gt;&#13;
-&lt;memoryInstance derived_from="RAM" id="SRAM" location="0x04000000" size="0x00015fe0"/&gt;&#13;
+&lt;memory id="RAM" size="64" type="RAM"/&gt;&#13;
+&lt;memoryInstance derived_from="Flash" driver="JN5189_640K.cfx" id="PROGRAM_FLASH" location="0x00000000" size="0x000A0000"/&gt;&#13;
+&lt;memoryInstance derived_from="RAM" id="SRAM" location="0x04000000" size="0x00015FE0"/&gt;&#13;
 &lt;memoryInstance derived_from="RAM" id="SRAM1" location="0x04020000" size="0x00010000"/&gt;&#13;
 &lt;/chip&gt;&#13;
 &lt;processor&gt;&#13;

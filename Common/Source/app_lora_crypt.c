@@ -212,12 +212,21 @@ PRIVATE void vComputeMIC(uint8 *pu8Data, uint8 u8Len, uint8 *pu8Key, uint8 *pu8M
 PRIVATE void vAesCtrCrypt(uint8 *pu8Data, uint8 u8Len, uint8 *pu8Key, uint8 *pu8Nonce)
 {
 #if (ZIGBEE_USE_FRAMEWORK != 0)
-    uint8 au8Padded[32];  /* Max 2 AES blocks = 32 bytes (enough for 19B payload) */
-    uint8 au8Output[32];
+    /* Buffer dimensionne pour le plus gros paquet : OTA_BLOCK chiffre = 66 bytes
+     * (header 2 bytes deja exclus par le caller), padded a 80 bytes (5 blocs AES).
+     * 96 = 6 blocs AES, marge de securite pour evolutions futures. */
+    uint8 au8Padded[96];
+    uint8 au8Output[96];
     uint8 au8Counter[AES_BLOCK_SIZE];
 
     /* Pad input to multiple of 16 */
     uint8 u8PaddedLen = ((u8Len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
+
+    /* Garde-fou : refuse silencieusement les longueurs trop grosses pour
+     * eviter un stack smash. u8Len est uint8 (max 255), padded max 256. */
+    if (u8PaddedLen > sizeof(au8Padded)) {
+        return;
+    }
 
     memset(au8Padded, 0, u8PaddedLen);
     memcpy(au8Padded, pu8Data, u8Len);

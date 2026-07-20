@@ -35,9 +35,23 @@
 #define LORA_TIC_PKT_PAIR_CONFIRM      0x05
 
 /* Packet sizes */
-#define LORA_PAIR_REQUEST_SIZE         11  /* type+seq+MAC(8)+channel */
-#define LORA_PAIR_RESPONSE_SIZE        19  /* type+seq+key(16)+status */
+#define LORA_PAIR_REQUEST_BASE_SIZE    11  /* type+seq+MAC(8)+channel */
+#define LORA_PAIR_REQUEST_SIZE         LORA_PAIR_REQUEST_BASE_SIZE  /* legacy alias */
+#define LORA_PAIR_RESPONSE_SIZE        20  /* type+seq+key(16)+status+op_channel */
 #define LORA_PAIR_CONFIRM_SIZE         15  /* type+seq+MAC(8)+proof(4)+status */
+
+/* Extension PAIR_REQUEST (LiXee-Box >= v2.22) :
+ *   Format 14+N octets, retro-compatible avec les receivers antérieurs
+ *   qui liront simplement 11 octets et ignoreront la suite.
+ *   [11-12] device_id (uint16 BE) — nomme le template data/tp/<device_id>.json
+ *   [13]    longueur du model (N)
+ *   [14..]  model ASCII (N octets)
+ */
+#define LORA_PAIR_REQUEST_HAS_EXT      1  /* 1 = envoie l'extension, 0 = format legacy 11 octets */
+#define LORA_DEVICE_ID_ZLINKY_TIC      0x0051  /* device_id LiXee du ZLinky — template data/tp/0051.json */
+#define LORA_DEVICE_MODEL_ZLINKY_TIC   "ZLinky_TIC"  /* cle dans data/tp/0051.json cote LiXee-Box */
+#define LORA_DEVICE_MODEL_MAX_LEN      32   /* garde-fou de securite (permet des noms d'objets futurs plus longs) */
+#define LORA_PAIR_REQUEST_MAX_SIZE     (LORA_PAIR_REQUEST_BASE_SIZE + 3 + LORA_DEVICE_MODEL_MAX_LEN)
 
 /* PDM record ID for pairing data */
 #define PDM_ID_LORA_PAIRING            0xA110
@@ -77,12 +91,31 @@ typedef enum {
     LORA_PAIR_PAIRED          /* Key stored, encrypted data TX active */
 } eLoraPairState_t;
 
-/* PDM persistent pairing data */
+/* PDM persistent pairing data
+ *
+ * IMPORTANT : la taille de cette structure ne doit PAS changer. Les 3 octets
+ * anciennement reserves portent desormais la config radio pilotable par
+ * downlink ; un enregistrement PDM ecrit par une version anterieure les lit
+ * a 0, valeur invalide qui declenche le repli sur les defauts (cf.
+ * APP_u8LoraPairGetSF / GetTxIntervalSec). Les modules deja appaires
+ * survivent donc a la mise a jour. */
 typedef struct {
     uint32  u32Magic;                   /* LORA_PAIR_MAGIC = valid record */
     uint8   au8NetKey[LORA_AES_KEY_SIZE]; /* AES-128 network key */
     uint8   au8MAC[LORA_MAC_SIZE];      /* Own MAC address (for nonce) */
+    uint8   u8OpChannel;                /* Operational channel (0..7), assigned by RX at pairing */
+    uint8   u8SpreadingFactor;          /* SF 7..12 ; 0 = non renseigne → defaut */
+    uint8   u8TxIntervalSec;            /* Intervalle TX en s ; 0 = non renseigne → defaut */
+    uint8   u8Reserved;                 /* alignement / usage futur */
 } tsLoraPairingData;
+
+/* Bornes et defauts de la config pilotable par downlink */
+#define LORA_SF_MIN                    7
+#define LORA_SF_MAX                    12
+#define LORA_SF_DEFAULT                11
+#define LORA_TX_INTERVAL_SEC_MIN       3    /* sous 3 s le budget alim TIC ne suit plus */
+#define LORA_TX_INTERVAL_SEC_MAX       240
+#define LORA_TX_INTERVAL_SEC_DEFAULT   5
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -117,6 +150,35 @@ PUBLIC uint8* APP_pu8LoraPairGetKey(void);
  *        Used for nonce construction
  */
 PUBLIC uint8* APP_pu8LoraPairGetMAC(void);
+
+/**
+ * @brief Get the operational channel (0..LORA_NUM_CHANNELS-1)
+ *        Returns LORA_PAIR_CHANNEL if not paired or invalid.
+ */
+PUBLIC uint8 APP_u8LoraPairGetOpChannel(void);
+
+/**
+ * @brief Config radio pilotable par downlink. Chaque getter valide la valeur
+ *        stockee et retombe sur le defaut si elle est hors bornes (cas d'un
+ *        enregistrement PDM ecrit par une version anterieure).
+ */
+PUBLIC uint8 APP_u8LoraPairGetSF(void);
+PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void);
+
+/**
+ * @brief Applique une config radio en RAM (sans ecriture PDM).
+ *        Utilise par le module downlink, qui ne persiste qu'apres
+ *        confirmation du recepteur.
+ * @return TRUE si la valeur est dans les bornes et a ete appliquee
+ */
+PUBLIC bool_t APP_bLoraPairSetOpChannel(uint8 u8Channel);
+PUBLIC bool_t APP_bLoraPairSetSF(uint8 u8SF);
+PUBLIC bool_t APP_bLoraPairSetTxIntervalSec(uint8 u8Sec);
+
+/**
+ * @brief Ecrit la config courante en PDM (appele apres confirmation)
+ */
+PUBLIC void APP_vLoraPairSaveConfig(void);
 
 /**
  * @brief Timer callback for pairing cycle (500ms TX/RX)
