@@ -319,7 +319,6 @@ void main_task (uint32_t parameter)
         ZTIMER_vTask();
         APP_taskRouter();
         APP_vLoRaTicPollTx();
-        APP_vLoraCmdPollRollback();
 
 
 #ifdef WATCHDOG_ALLOWED

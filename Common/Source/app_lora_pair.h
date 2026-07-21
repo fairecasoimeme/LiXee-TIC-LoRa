@@ -37,8 +37,14 @@
 /* Packet sizes */
 #define LORA_PAIR_REQUEST_BASE_SIZE    11  /* type+seq+MAC(8)+channel */
 #define LORA_PAIR_REQUEST_SIZE         LORA_PAIR_REQUEST_BASE_SIZE  /* legacy alias */
-#define LORA_PAIR_RESPONSE_SIZE        20  /* type+seq+key(16)+status+op_channel */
+#define LORA_PAIR_RESPONSE_SIZE        21  /* type+seq+key(16)+status+op_channel+op_SF */
+#define LORA_PAIR_RESPONSE_SIZE_LEGACY 20  /* sans op_SF — receivers < v2.23 → SF11 par defaut */
 #define LORA_PAIR_CONFIRM_SIZE         15  /* type+seq+MAC(8)+proof(4)+status */
+
+/* Rendez-vous d'appairage : FIXE, independant de la config operationnelle.
+ * Un ZLinky qui tourne en SF7/canal7 doit pouvoir revenir ici pour renegocier.
+ * Le canal est LORA_PAIR_CHANNEL (defini dans app_lora_channels.h). */
+#define LORA_PAIR_SF                   11  /* SF du handshake (SX1280 SF11 = 0xB0) */
 
 /* Extension PAIR_REQUEST (LiXee-Box >= v2.22) :
  *   Format 14+N octets, retro-compatible avec les receivers antérieurs
@@ -94,11 +100,15 @@ typedef enum {
 /* PDM persistent pairing data
  *
  * IMPORTANT : la taille de cette structure ne doit PAS changer. Les 3 octets
- * anciennement reserves portent desormais la config radio pilotable par
- * downlink ; un enregistrement PDM ecrit par une version anterieure les lit
- * a 0, valeur invalide qui declenche le repli sur les defauts (cf.
- * APP_u8LoraPairGetSF / GetTxIntervalSec). Les modules deja appaires
- * survivent donc a la mise a jour. */
+ * anciennement reserves portent desormais le SF et l'intervalle TX, negocies
+ * a l'appairage (PAIR_RESPONSE). Un enregistrement PDM ecrit par une version
+ * anterieure les lit a 0, valeur invalide qui declenche le repli sur les
+ * defauts (cf. APP_u8LoraPairGetSF / GetTxIntervalSec). Les modules deja
+ * appaires survivent donc a la mise a jour.
+ *
+ * Le SF et le canal se changent en REFAISANT un appairage (appui long), pas
+ * en cours de route : ce sont des parametres reseau communs a tous les
+ * ZLinky d'un meme recepteur, pas des reglages par appareil. */
 typedef struct {
     uint32  u32Magic;                   /* LORA_PAIR_MAGIC = valid record */
     uint8   au8NetKey[LORA_AES_KEY_SIZE]; /* AES-128 network key */
@@ -109,7 +119,7 @@ typedef struct {
     uint8   u8Reserved;                 /* alignement / usage futur */
 } tsLoraPairingData;
 
-/* Bornes et defauts de la config pilotable par downlink */
+/* Bornes et defauts de la config radio (negociee a l'appairage) */
 #define LORA_SF_MIN                    7
 #define LORA_SF_MAX                    12
 #define LORA_SF_DEFAULT                11
@@ -158,7 +168,7 @@ PUBLIC uint8* APP_pu8LoraPairGetMAC(void);
 PUBLIC uint8 APP_u8LoraPairGetOpChannel(void);
 
 /**
- * @brief Config radio pilotable par downlink. Chaque getter valide la valeur
+ * @brief Config radio negociee a l'appairage. Chaque getter valide la valeur
  *        stockee et retombe sur le defaut si elle est hors bornes (cas d'un
  *        enregistrement PDM ecrit par une version anterieure).
  */
@@ -166,19 +176,13 @@ PUBLIC uint8 APP_u8LoraPairGetSF(void);
 PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void);
 
 /**
- * @brief Applique une config radio en RAM (sans ecriture PDM).
- *        Utilise par le module downlink, qui ne persiste qu'apres
- *        confirmation du recepteur.
+ * @brief Applique une valeur de config en RAM. Utilise pendant le handshake
+ *        pour stocker le SF assigne par le recepteur avant persistance.
  * @return TRUE si la valeur est dans les bornes et a ete appliquee
  */
 PUBLIC bool_t APP_bLoraPairSetOpChannel(uint8 u8Channel);
 PUBLIC bool_t APP_bLoraPairSetSF(uint8 u8SF);
 PUBLIC bool_t APP_bLoraPairSetTxIntervalSec(uint8 u8Sec);
-
-/**
- * @brief Ecrit la config courante en PDM (appele apres confirmation)
- */
-PUBLIC void APP_vLoraPairSaveConfig(void);
 
 /**
  * @brief Timer callback for pairing cycle (500ms TX/RX)

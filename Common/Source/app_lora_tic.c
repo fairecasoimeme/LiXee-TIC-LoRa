@@ -1217,8 +1217,10 @@ PRIVATE uint8 u8BuildExtTariffOption(uint8 *pu8Buffer)
  ****************************************************************************/
 PRIVATE void vReconfigureLoRaForTx(void)
 {
-    /* Canal operationnel (PAIR_CHANNEL si pas appaire, OP_CHANNEL sinon) */
-    APP_vLoRaTicReconfigureRadio(APP_u8LoraPairGetOpChannel());
+    /* Config operationnelle : canal + SF negocies a l'appairage
+     * (PAIR_CHANNEL / SF11 par defaut si pas appaire). */
+    APP_vLoRaTicReconfigureRadio(APP_u8LoraPairGetOpChannel(),
+                                 APP_u8LoraPairGetSF());
 }
 
 /****************************************************************************
@@ -1226,20 +1228,25 @@ PRIVATE void vReconfigureLoRaForTx(void)
  * NAME: APP_vLoRaTicReconfigureRadio
  *
  * DESCRIPTION:
- * Reset materiel du SX1280 + configuration LoRa COMPLETE sur le canal donne.
+ * Reset materiel du SX1280 + configuration LoRa COMPLETE sur le canal et le
+ * SF donnes.
  *
- * Publique car le module pairing en a besoin : sans reconfig complete, le
- * chemin d'appairage dependrait de l'etat laisse par un autre module (au boot
- * c'est app_start.c, apres un appui long c'est le dernier TX TIC). Cette
- * dependance implicite rendait l'appairage par bouton non fonctionnel tant
- * qu'on n'avait pas power-cycle le module.
+ * Publique car le module pairing en a besoin : le handshake se fait sur un
+ * rendez-vous FIXE (canal 3 / SF11) independant de la config operationnelle,
+ * ce que seul un appelant externe peut imposer. Sans reconfig complete, le
+ * chemin d'appairage dependrait aussi de l'etat laisse par un autre module
+ * (au boot app_start.c, apres un appui long le dernier TX TIC), ce qui
+ * rendait l'appairage par bouton non fonctionnel avant power-cycle.
+ *
+ * @param u8Channel  canal 0..7
+ * @param u8SF       spreading factor 7..12 (encode en interne SF << 4)
  *
  ****************************************************************************/
-PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel)
+PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
 {
     DBG_vPrintf(TRACE_LORA_TIC,
-                "LORA_TIC: HW Reset + Calibrate + full reconfig (ch %d)...\r\n",
-                u8Channel);
+                "LORA_TIC: HW Reset + Calibrate + full reconfig (ch %d, SF%d)...\r\n",
+                u8Channel, u8SF);
 
     /* ====== HW Reset + Calibrate ======
      * Le TCXOEN est cable directement au 3.3V (pas sur un GPIO),
@@ -1307,12 +1314,12 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel)
     for (volatile uint32 i = 0; i < 24000; i++);  /* 2ms PLL settling */
 
     /* 8) Modulation SF/BW406/CR4_5 + mandatory registers.
-     *    Le SF est pilotable par downlink (defaut SF11 : +3 dB de sensibilite
+     *    Le SF est negocie a l'appairage (defaut SF11 : +3 dB de sensibilite
      *    vs SF10 pour 2x l'airtime, compromis portee / stabilite alim).
      *    Encodage SX1280 : SF7=0x70 ... SF12=0xC0, soit (SF << 4). */
     {
         SX1280_LoRaModParams_t modParams;
-        modParams.spreadingFactor = (uint8_t)(APP_u8LoraPairGetSF() << 4);
+        modParams.spreadingFactor = (uint8_t)(u8SF << 4);
         modParams.bandwidth       = SX1280_LORA_BW_406;
         modParams.codingRate      = SX1280_LORA_CR_4_5;
         SX1280_SetModulationParams(&modParams);

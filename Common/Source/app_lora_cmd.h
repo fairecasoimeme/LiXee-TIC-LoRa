@@ -4,25 +4,24 @@
  *
  * COMPONENT:          app_lora_cmd.h
  *
- * DESCRIPTION:        Canal de commande descendant (recepteur -> ZLinky).
+ * DESCRIPTION:        Canal descendant (recepteur -> ZLinky) : lecture
+ *                     d'attribut a la demande, facon ZCL Read Attributes.
  *
  *                     Modele Class A facon LoRaWAN : le ZLinky ouvre une
  *                     courte fenetre de reception juste apres chaque TX de
  *                     donnees. Le recepteur, qui vient de recevoir l'uplink,
- *                     y depose une commande en attente.
+ *                     y depose une requete de lecture.
+ *
+ *                     Le descendant ne sert QU'A interroger un attribut. Il
+ *                     ne modifie aucun etat : le SF et le canal se negocient
+ *                     a l'appairage (PAIR_RESPONSE), pas ici. Une lecture
+ *                     etant idempotente, il n'y a ni compteur anti-rejeu ni
+ *                     retour arriere a gerer — un rejeu ne fait que relire la
+ *                     valeur courante.
  *
  *                     Cout : ~300 ms de RX par cycle de ~7 s, soit ~1,5 mW
  *                     en moyenne. Une ecoute permanente couterait ~30 mW,
  *                     soit pres du quart du budget TIC (130 mW).
- *
- *                     Deux protections, cf. LORA_PROTOCOL.md :
- *                       - compteur monotone contre le rejeu
- *                       - retour arriere automatique a 60 s sur les commandes
- *                         qui touchent a la liaison radio (canal, SF,
- *                         intervalle) : sans confirmation du recepteur sur la
- *                         nouvelle config, l'ancienne est restauree. Protege
- *                         aussi bien de l'erreur que de l'attaque, un mauvais
- *                         canal rendant le module injoignable.
  *
  ****************************************************************************/
 
@@ -36,35 +35,36 @@
 /****************************************************************************/
 
 /* Types de paquets (byte[0] bits[3:0]) */
-#define LORA_TIC_PKT_DOWNLINK_CMD   0x0B  /* recepteur -> ZLinky */
-#define LORA_TIC_PKT_DOWNLINK_ACK   0x0C  /* ZLinky -> recepteur */
+#define LORA_TIC_PKT_POLL_REQUEST   0x0B  /* recepteur -> ZLinky */
+#define LORA_TIC_PKT_POLL_RESPONSE  0x0C  /* ZLinky -> recepteur */
 
-/* Identifiants de commande (DOWNLINK_CMD byte[2]) */
-#define LORA_CMD_PING               0x00  /* test de liaison, sans effet */
-#define LORA_CMD_SET_CHANNEL        0x01  /* param : canal 0..7 */
-#define LORA_CMD_SET_SF             0x02  /* param : SF 7..12 */
-#define LORA_CMD_SET_TX_INTERVAL    0x03  /* param : secondes (uint16 BE) */
-#define LORA_CMD_ENTER_OTA          0x04  /* bascule en mode OTA recovery */
-#define LORA_CMD_CONFIRM            0x05  /* valide la config en attente */
+/* Codes de statut (POLL_RESPONSE byte[6]) */
+#define LORA_POLL_STATUS_OK             0x00
+#define LORA_POLL_STATUS_UNKNOWN_ATTR   0x01  /* cluster/attribut non gere */
+#define LORA_POLL_STATUS_BAD_REQUEST    0x02  /* trame malformee */
 
-/* Codes de statut (DOWNLINK_ACK byte[7]) */
-#define LORA_CMD_STATUS_OK              0x00
-#define LORA_CMD_STATUS_BAD_COUNTER     0x01  /* rejeu : compteur <= dernier vu */
-#define LORA_CMD_STATUS_BAD_PARAM       0x02  /* valeur hors bornes */
-#define LORA_CMD_STATUS_UNKNOWN_CMD     0x03
-#define LORA_CMD_STATUS_PENDING_CONFIRM 0x04  /* applique, attend CONFIRM */
-#define LORA_CMD_STATUS_NOTHING_PENDING 0x05  /* CONFIRM sans config en attente */
+/* Types de donnees ZCL utilises dans les reponses (sous-ensemble) */
+#define LORA_ZCL_TYPE_UINT8         0x20
+#define LORA_ZCL_TYPE_UINT16        0x21
+#define LORA_ZCL_TYPE_UINT32        0x23
+#define LORA_ZCL_TYPE_UINT48        0x25
+#define LORA_ZCL_TYPE_INT8          0x28
+#define LORA_ZCL_TYPE_INT16         0x29
+#define LORA_ZCL_TYPE_OCTET_STRING  0x41
+#define LORA_ZCL_TYPE_CHAR_STRING   0x42
+
+/* Cluster IDs adressables */
+#define LORA_CLUSTER_LIXEE          0xFF66  /* cluster custom LiXee (TIC) */
+#define LORA_CLUSTER_METERING       0x0702  /* Simple Metering (index energie) */
 
 /* Tailles */
-#define LORA_CMD_HDR_SIZE           7   /* type+seq+cmd_id+counter(4) */
-#define LORA_CMD_MAX_SIZE           16  /* header + params, hors MIC */
-#define LORA_CMD_ACK_SIZE           9   /* type+seq+cmd_id+counter(4)+status+info */
+#define LORA_POLL_REQUEST_SIZE      6   /* type+seq+cluster(2)+attr(2) */
+#define LORA_POLL_RESP_HDR_SIZE     9   /* type+seq+cluster(2)+attr(2)+status+zcl_type+len */
+#define LORA_POLL_VALUE_MAX         17  /* plus grande valeur transmise (char string) */
+#define LORA_POLL_RESP_MAX_SIZE     (LORA_POLL_RESP_HDR_SIZE + LORA_POLL_VALUE_MAX)
 
 /* Fenetre de reception ouverte apres chaque TX de donnees */
 #define LORA_CMD_RX_WINDOW_MS       300
-
-/* Delai de retour arriere si le recepteur ne confirme pas */
-#define LORA_CMD_CONFIRM_TIMEOUT_MS 60000
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -76,7 +76,7 @@
 PUBLIC void APP_vLoraCmdInit(void);
 
 /**
- * @brief Ouvre la fenetre de reception downlink.
+ * @brief Ouvre la fenetre de reception d'une requete de lecture.
  *        A appeler juste apres un TX de donnees, la radio etant encore
  *        configuree et en standby.
  *
@@ -85,16 +85,5 @@ PUBLIC void APP_vLoraCmdInit(void);
  *        pour ne pas geler la LED ni le scan bouton.
  */
 PUBLIC void APP_vLoraCmdRxWindow(void);
-
-/**
- * @brief Verifie l'echeance de retour arriere. A appeler regulierement
- *        depuis la boucle principale.
- */
-PUBLIC void APP_vLoraCmdPollRollback(void);
-
-/**
- * @brief TRUE si une config est appliquee mais pas encore confirmee.
- */
-PUBLIC bool_t APP_bLoraCmdIsPendingConfirm(void);
 
 #endif /* APP_LORA_CMD_H_ */

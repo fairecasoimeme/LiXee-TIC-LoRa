@@ -103,7 +103,7 @@ PRIVATE void vReadMAC(uint8 *pu8MAC);
 PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE void vSendPairConfirm(void);
-PRIVATE void vReconfigureForPairTx(uint8 u8Channel);
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
 
 
 /****************************************************************************/
@@ -355,16 +355,6 @@ PUBLIC bool_t APP_bLoraPairSetTxIntervalSec(uint8 u8Sec)
 
 /****************************************************************************
  *
- * NAME: APP_vLoraPairSaveConfig
- *
- ****************************************************************************/
-PUBLIC void APP_vLoraPairSaveConfig(void)
-{
-    vSavePairingToPDM();
-}
-
-/****************************************************************************
- *
  * NAME: APP_cbTimerLoraPair
  *
  * DESCRIPTION:
@@ -539,22 +529,23 @@ PRIVATE void vReadMAC(uint8 *pu8MAC)
  * NAME: vReconfigureForPairTx
  *
  * DESCRIPTION:
- * Reconfigure le SX1280 pour un TX d'appairage sur le canal donne.
+ * Reconfigure le SX1280 pour un TX d'appairage sur (canal, SF) donnes.
  *
- * Fait une reconfiguration COMPLETE (reset materiel inclus), comme le
- * chemin TX TIC. Auparavant cette fonction se contentait d'un standby +
- * IRQ et dependait donc de la configuration laissee par un autre module :
- *   - au boot, celle posee par app_start.c → l'appairage fonctionnait
- *   - apres un appui long alors que le module etait appaire, celle laissee
- *     par le dernier TX TIC → l'appairage ne partait pas tant qu'on n'avait
- *     pas coupe puis remis l'alimentation.
+ * Le handshake (REQUEST + RESPONSE) se fait sur le rendez-vous FIXE
+ * LORA_PAIR_CHANNEL / LORA_PAIR_SF, quelle que soit la config operationnelle
+ * stockee : un module qui tourne en SF7/canal7 doit pouvoir y revenir pour
+ * renegocier. Le CONFIRM, lui, part sur la config operationnelle assignee
+ * par le recepteur, ce qui la valide au passage.
+ *
+ * Fait une reconfiguration COMPLETE (reset materiel inclus), comme le chemin
+ * TX TIC, pour ne pas dependre de l'etat laisse par un autre module.
  *
  ****************************************************************************/
-PRIVATE void vReconfigureForPairTx(uint8 u8Channel)
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF)
 {
-    /* Reset + config complete sur le canal demande (packet type, modulation,
-     * sync word, packet params, TX power) puis IRQ TX_DONE sur DIO1. */
-    APP_vLoRaTicReconfigureRadio(u8Channel);
+    /* Reset + config complete sur (canal, SF) : packet type, modulation,
+     * sync word, packet params, TX power, puis IRQ TX_DONE sur DIO1. */
+    APP_vLoRaTicReconfigureRadio(u8Channel, u8SF);
 
     /* IRQ: TX_DONE + TIMEOUT on DIO1 */
     SX1280_SetDioIrqParams(
@@ -615,8 +606,9 @@ PRIVATE void vSendPairRequest(void)
     /* Silence SPI debug during TX */
     g_u8SX1280_HalSilent = 1;
 
-    /* Reconfig complete sur le canal d'appairage (fixe, connu des deux cotes) */
-    vReconfigureForPairTx(LORA_PAIR_CHANNEL);
+    /* Reconfig complete sur le rendez-vous fixe (canal 3 / SF11), connu des
+     * deux cotes independamment de la config operationnelle. */
+    vReconfigureForPairTx(LORA_PAIR_CHANNEL, LORA_PAIR_SF);
 
     /* Send payload */
     SX1280_SendPayload(au8Pkt, u8PktLen);
@@ -710,11 +702,14 @@ PRIVATE bool_t bListenForPairResponse(void)
     DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: RX len=%d RSSI=%d SNR=%d\r\n",
                 u8RxLen, i8Rssi, i8Snr);
 
-    /* Validate PAIR_RESPONSE */
-    if (u8RxLen != LORA_PAIR_RESPONSE_SIZE)
+    /* Validate PAIR_RESPONSE. On accepte deux tailles :
+     *   21 = format courant (avec op_SF en [20])
+     *   20 = format legacy (receivers < v2.23) → SF11 par defaut */
+    if (u8RxLen != LORA_PAIR_RESPONSE_SIZE &&
+        u8RxLen != LORA_PAIR_RESPONSE_SIZE_LEGACY)
     {
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Wrong size (expected %d, got %d)\r\n",
-                    LORA_PAIR_RESPONSE_SIZE, u8RxLen);
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Wrong size (expected %d ou %d, got %d)\r\n",
+                    LORA_PAIR_RESPONSE_SIZE, LORA_PAIR_RESPONSE_SIZE_LEGACY, u8RxLen);
         return FALSE;
     }
 
@@ -746,9 +741,22 @@ PRIVATE bool_t bListenForPairResponse(void)
     }
     sPairingData.u8OpChannel = u8OpCh;
 
+    /* Extract operational SF (byte 20). Absent en format legacy → SF11.
+     * APP_bLoraPairSetSF valide la borne 7..12 ; hors bornes → defaut. */
+    uint8 u8OpSF = LORA_SF_DEFAULT;
+    if (u8RxLen == LORA_PAIR_RESPONSE_SIZE)
+        u8OpSF = au8RxBuf[20];
+    if (!APP_bLoraPairSetSF(u8OpSF))
+    {
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: SF assigne invalide (%d) → defaut SF%d\r\n",
+            u8OpSF, LORA_SF_DEFAULT);
+        APP_bLoraPairSetSF(LORA_SF_DEFAULT);
+    }
+
     DBG_vPrintf(TRACE_LORA_PAIR,
-        "LORA_PAIR: PAIR_RESPONSE received! Key extracted, op_channel=%d\r\n",
-        u8OpCh);
+        "LORA_PAIR: PAIR_RESPONSE received! Key extracted, op_channel=%d op_SF=%d\r\n",
+        u8OpCh, APP_u8LoraPairGetSF());
 
     return TRUE;
 }
@@ -800,14 +808,17 @@ PRIVATE void vSendPairConfirm(void)
     DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: TX PAIR_CONFIRM proof=%02X%02X%02X%02X\r\n",
                 au8Pkt[10], au8Pkt[11], au8Pkt[12], au8Pkt[13]);
 
-    PRINTF("[CONF] step 1: enter (switching to op_channel=%d)\r\n",
-           sPairingData.u8OpChannel);
+    PRINTF("[CONF] step 1: enter (switching to op_channel=%d SF%d)\r\n",
+           sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
     g_u8SX1280_HalSilent = 0;  /* DEBUG: keep SPI traces visible */
 
-    /* Reconfig complete directement sur l'op_channel assigne par le recepteur :
-     * c'est la qu'il ecoute le CONFIRM. */
-    PRINTF("[CONF] step 2: vReconfigureForPairTx(ch=%d)\r\n", sPairingData.u8OpChannel);
-    vReconfigureForPairTx(sPairingData.u8OpChannel);
+    /* Reconfig complete sur la config OPERATIONNELLE (canal + SF) assignee par
+     * le recepteur : c'est la qu'il ecoute le CONFIRM. Emettre le CONFIRM sur
+     * cette config la valide — si elle ne passe pas, l'appairage echoue ici et
+     * on retente, plutot que de se retrouver appaire sur une config muette. */
+    PRINTF("[CONF] step 2: vReconfigureForPairTx(ch=%d SF%d)\r\n",
+           sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
+    vReconfigureForPairTx(sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
     PRINTF("[CONF] step 3: SendPayload(%d bytes)\r\n", LORA_PAIR_CONFIRM_SIZE);
     SX1280_SendPayload(au8Pkt, LORA_PAIR_CONFIRM_SIZE);
     PRINTF("[CONF] step 4: SendPayload returned\r\n");

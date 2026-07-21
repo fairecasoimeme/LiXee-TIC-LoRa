@@ -248,7 +248,7 @@ PUBLIC bool_t APP_bLoraTicTransmitRaw(uint8 *pu8Data, uint8 u8Len);
  *
  * @param u8Channel  Index de canal 0..LORA_NUM_CHANNELS-1
  */
-PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel);
+PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF);
 
 /****************************************************************************/
 /***        END OF FILE                                                   ***/

@@ -74,8 +74,8 @@ L'appairage se fait **toujours sur le canal 3**. Le récepteur assigne ensuite u
 | `0x08` | OTA_END | box → device | ✅ |
 | `0x09` | OTA_ACK | device → box | ✅ |
 | `0x0A` | OTA_STATUS | device → box | ✅ |
-| `0x0B` | DOWNLINK_CMD | box → device | ✅ |
-| `0x0C` | DOWNLINK_ACK | device → box | ✅ |
+| `0x0B` | POLL_REQUEST | box → device | ✅ |
+| `0x0C` | POLL_RESPONSE | device → box | ✅ |
 
 Donc `byte[0]` vaut `0x11` pour ESSENTIAL, `0x12` pour EXTENDED, `0x13` pour
 PAIR_REQUEST, etc.
@@ -121,21 +121,28 @@ PAIR_REQUEST, etc.
 
 ## 4. Appairage
 
-Le récepteur ouvre une fenêtre de 30 s sur le **canal 3**. L'émetteur envoie un
-PAIR_REQUEST toutes les 300 ms et écoute 200 ms après chaque envoi.
+L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF11**, quelle que soit
+la configuration opérationnelle. C'est ce qui permet à un ZLinky qui tourne en
+SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre une
+fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
+300 ms et écoute 200 ms après chaque envoi.
+
+**C'est l'appairage qui fixe le SF et le canal opérationnels.** Ce sont des
+paramètres **réseau**, communs à tous les ZLinky d'un même récepteur, pas des
+réglages par appareil. Pour les changer, on **refait un appairage** (appui long).
 
 ```
 device                                box
-  │                                    │
-  │──── PAIR_REQUEST (ch 3) ─────────▶│
+  │         (rendez-vous : canal 3, SF11)
+  │──── PAIR_REQUEST ────────────────▶│
   │                                    │  génère clé AES-128
-  │                                    │  choisit op_channel (CCA)
-  │◀─── PAIR_RESPONSE (ch 3) ──────────│
+  │                                    │  choisit op_channel + op_SF
+  │◀─── PAIR_RESPONSE ─────────────────│  (clé + op_channel + op_SF)
   │                                    │
-  │   bascule sur op_channel           │  bascule sur op_channel
+  │   bascule sur (op_channel, op_SF)  │  bascule sur (op_channel, op_SF)
   │                                    │
-  │──── PAIR_CONFIRM (op_channel) ───▶│
-  │                                    │  vérifie la preuve AES
+  │──── PAIR_CONFIRM ────────────────▶│
+  │      (sur op_channel / op_SF)      │  vérifie la preuve AES
   │                                    │  ✅ appairé
 ```
 
@@ -175,7 +182,7 @@ type
 
 > Un récepteur ancien lit ses 11 premiers octets et ignore la queue — pas de casse.
 
-### 4.2 PAIR_RESPONSE — box → device (20 octets)
+### 4.2 PAIR_RESPONSE — box → device (21 octets)
 
 | Offset | Taille | Champ |
 |---|---|---|
@@ -184,12 +191,21 @@ type
 | 2 | 16 | **clé AES-128** (⚠️ en clair sur l'air) |
 | 18 | 1 | status (`0x00` = OK) |
 | 19 | 1 | **op_channel** (0..7) — canal assigné pour les données |
+| 20 | 1 | **op_SF** (7..12) — spreading factor assigné pour les données |
 
-Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3).
+Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3). Si
+`op_SF` est hors plage, il retombe sur **SF11**.
+
+> **Rétrocompat** : un récepteur qui envoie encore l'ancien format **20 octets**
+> (sans `op_SF`) est accepté ; l'émetteur applique SF11 par défaut. Un ZLinky
+> anciennement appairé (enregistrement PDM sans SF) fait de même.
 
 ### 4.3 PAIR_CONFIRM — device → box (15 octets)
 
-Envoyé **sur l'op_channel** (pas sur le canal 3).
+Envoyé **sur la config opérationnelle** (op_channel + op_SF), pas sur le
+rendez-vous. Émettre le CONFIRM sur cette config la **valide** : si elle ne
+passe pas, l'appairage échoue ici et l'émetteur retente depuis le rendez-vous,
+plutôt que de se retrouver appairé sur une config muette.
 
 | Offset | Taille | Champ |
 |---|---|---|
@@ -208,7 +224,7 @@ le device connaît bien la clé → appairage validé.
 
 | Élément | Période |
 |---|---|
-| DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, pilotable par downlink) |
+| DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, négociée à l'appairage) |
 | DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
 | Cycle complet des 11 sous-types EXTENDED | **~220 s** (~3 min 40) |
 
@@ -604,20 +620,24 @@ type
 
 ---
 
-## 8. Canal de commande descendant (bidirectionnel)
+## 8. Lecture d'attribut à la demande (bidirectionnel)
 
-Le récepteur peut envoyer des commandes au ZLinky (changement de canal, de SF,
-d'intervalle, passage en OTA). Modèle **Class A façon LoRaWAN**.
+Le canal descendant sert **uniquement à interroger un attribut** — modèle ZCL
+Read Attributes. Il ne modifie aucun état : le SF et le canal se négocient à
+l'appairage (§4), pas ici.
+
+Une lecture étant idempotente, il n'y a **ni compteur anti-rejeu ni retour
+arrière** à gérer : rejouer une requête ne fait que relire la valeur courante.
 
 ### Principe
 
 Le ZLinky ouvre une **fenêtre de réception de 300 ms juste après chaque TX**.
-Le récepteur, qui vient de recevoir l'uplink, y dépose une commande en attente.
+Le récepteur, qui vient de recevoir l'uplink, y dépose sa requête.
 
 ```
-ZLinky ──── ESSENTIAL / EXTENDED ────▶ Récepteur
-       ◀─── DOWNLINK_CMD (optionnel) ─┘   dans les 300 ms
-       ──── DOWNLINK_ACK ─────────────▶
+ZLinky ──── ESSENTIAL / EXTENDED ─────▶ Récepteur
+       ◀─── POLL_REQUEST (optionnel) ──┘   dans les 300 ms
+       ──── POLL_RESPONSE ─────────────▶
 ```
 
 Chronologie dans la fenêtre :
@@ -635,85 +655,98 @@ Chronologie dans la fenêtre :
 > ~30 mW, soit près du quart du budget TIC (130 mW). La fenêtre courte revient
 > à ~1,5 mW, soit ~1 %.
 
-### DOWNLINK_CMD — box → device (7..16 octets + MIC)
+### POLL_REQUEST — box → device (6 octets + MIC)
 
 | Offset | Taille | Champ |
 |---|---|---|
 | 0 | 1 | `0x1B` (version 1, type `0x0B`) |
 | 1 | 1 | seq |
-| 2 | 1 | **cmd_id** |
-| 3-6 | 4 | **compteur** (uint32 BE) — anti-rejeu |
-| 7.. | 0-9 | paramètres, selon `cmd_id` |
+| 2-3 | 2 | **cluster_id** (uint16 BE) |
+| 4-5 | 2 | **attribute_id** (uint16 BE) |
 
-**Le compteur doit être strictement croissant.** Toute commande dont le
-compteur est inférieur ou égal au dernier accepté est rejetée avec
-`BAD_COUNTER`. C'est la protection contre le rejeu d'une commande capturée.
-
-| `cmd_id` | Commande | Paramètres | Rollback |
-|---|---|---|---|
-| `0x00` | `PING` | — | — |
-| `0x01` | `SET_CHANNEL` | [7] canal 0..7 | ✅ 60 s |
-| `0x02` | `SET_SF` | [7] SF 7..12 | ✅ 60 s |
-| `0x03` | `SET_TX_INTERVAL` | [7-8] secondes (uint16 BE, 3..240) | ✅ 60 s |
-| `0x04` | `ENTER_OTA` | — | — |
-| `0x05` | `CONFIRM` | — | valide la config en attente |
-
-### DOWNLINK_ACK — device → box (9 octets + MIC)
+### POLL_RESPONSE — device → box (9..26 octets + MIC)
 
 | Offset | Taille | Champ |
 |---|---|---|
 | 0 | 1 | `0x1C` (version 1, type `0x0C`) |
 | 1 | 1 | seq |
-| 2 | 1 | `cmd_id` acquitté |
-| 3-6 | 4 | compteur (écho) |
-| 7 | 1 | **statut** |
-| 8 | 1 | info (valeur courante, selon la commande) |
+| 2-3 | 2 | cluster_id (écho) |
+| 4-5 | 2 | attribute_id (écho) |
+| 6 | 1 | **statut** |
+| 7 | 1 | **type ZCL** de la valeur |
+| 8 | 1 | **longueur** de la valeur (N) |
+| 9..9+N-1 | N | **valeur** (big-endian pour les numériques) |
 
 | Statut | Signification |
 |---|---|
 | `0x00` | OK |
-| `0x01` | `BAD_COUNTER` — rejeu détecté |
-| `0x02` | `BAD_PARAM` — valeur hors bornes |
-| `0x03` | `UNKNOWN_CMD` |
-| `0x04` | `PENDING_CONFIRM` — appliqué, attend `CONFIRM` |
-| `0x05` | `NOTHING_PENDING` — `CONFIRM` sans config en attente |
+| `0x01` | `UNKNOWN_ATTR` — cluster/attribut non géré (N = 0) |
+| `0x02` | `BAD_REQUEST` — requête malformée |
 
-### Séquence de changement de config (avec retour arrière)
+Types ZCL utilisés :
 
-Les commandes qui touchent à la liaison radio ne sont **pas persistées
-immédiatement**. Sans cela, un canal mal choisi ou une commande forgée rendrait
-le module injoignable jusqu'à intervention physique sur le compteur.
+| Code | Type | Longueur |
+|---|---|---|
+| `0x20` | uint8 | 1 |
+| `0x21` | uint16 | 2 |
+| `0x23` | uint32 | 4 |
+| `0x25` | uint48 | 6 |
+| `0x28` | int8 | 1 |
+| `0x29` | int16 | 2 |
+| `0x41` | octet string | variable |
+| `0x42` | character string | variable |
+
+### Clusters et attributs adressables
+
+Mêmes identifiants que le firmware Zigbee LiXee, pour que la connaissance des
+clusters se transfère d'un monde à l'autre.
+
+**Cluster LiXee `0xFF66`** (données TIC spécifiques) :
+
+| attr | Étiquette | Type |
+|---|---|---|
+| `0x0000` | OPTARIF | char string |
+| `0x0001` | DEMAIN | char string |
+| `0x0005` | ADPS | uint16 |
+| `0x0010` | PTEC / LTARF (période tarifaire) | char string |
+| `0x0200` | LTARF | char string |
+| `0x0201` | NTARF | uint8 |
+| `0x0202` | DATE | char string |
+| `0x0203`..`0x0206` | EASD01..EASD04 | uint32 |
+| `0x0207` | SINSTI | uint16 |
+| `0x0208` | SMAXIN | uint16 |
+| `0x0210` | CCAIN | uint16 |
+| `0x0217` | STGE (8 car. hex) | char string |
+| `0x0218`..`0x0223` | DPM1/FPM1/DPM2/FPM2/DPM3/FPM3 | uint8 |
+| `0x0224` | RELAIS | uint16 |
+| `0x0300` | mode Linky | uint8 |
+
+**Cluster Simple Metering `0x0702`** (index d'énergie, transmis en uint32) :
+
+| attr | Étiquette | Type |
+|---|---|---|
+| `0x0000` | EAST (Std) / BASE (Histo) | uint32 |
+| `0x0001` | EAIT (injection) | uint32 |
+| `0x0100`..`0x0103` | index tarifaire 1 à 4 | uint32 |
+
+> Les autres clusters standard (mesure électrique `0x0B04`, identification
+> compteur `0x0B01`) ne sont pas encore mappés côté firmware : ils renvoient
+> `UNKNOWN_ATTR`. L'ajout se fait sur le même modèle dans `iBuildPollValue`.
+
+### Exemple
+
+Lire le mode Linky (cluster `0xFF66`, attr `0x0300`) :
 
 ```
-1. box → device   SET_CHANNEL(7)
-2. device         applique ch7, mémorise ch4, arme 60 s
-3. device → box   DOWNLINK_ACK(PENDING_CONFIRM, 7)   ← émis sur le canal 7
-4. box            bascule sur ch7, entend l'ACK
-5. box → device   CONFIRM
-6. device         annule le timer, écrit en PDM
-7. device → box   DOWNLINK_ACK(OK)
+box → device   1B 04 FF 66 03 00                    POLL_REQUEST
+device → box   1C 07 FF 66 03 00 00 20 01 01        POLL_RESPONSE
+               │           │     │  │  │  └─ valeur = 1 (Std Mono)
+               │           │     │  │  len=1
+               │           │     │  type ZCL uint8
+               │           │     status OK
+               │           attr 0x0300
+               cluster 0xFF66
 ```
-
-**Si l'étape 4 ou 5 échoue** (le récepteur n'entend rien sur le nouveau canal),
-le ZLinky restaure automatiquement l'ancienne config au bout de **60 secondes**
-et redevient joignable là où le récepteur écoute.
-
-Le point de retour est toujours la **dernière config confirmée** : deux
-commandes successives sans confirmation intermédiaire n'écrasent pas la
-sauvegarde d'origine.
-
-### Persistance de la config
-
-Les champs `SF` et `intervalle TX` sont stockés dans les 3 octets anciennement
-réservés de l'enregistrement PDM d'appairage. **La taille de la structure est
-inchangée** : un module appairé avec une version antérieure lit ces champs à 0,
-valeur invalide qui déclenche le repli sur les défauts (SF11, 5 s). Les
-appairages existants survivent donc à la mise à jour.
-
-> ⚠️ **Limite connue** : le compteur anti-rejeu n'est pas persisté. Après un
-> redémarrage du ZLinky il repart de 0, ce qui rouvre brièvement la possibilité
-> de rejouer une commande capturée, jusqu'au prochain envoi du récepteur.
-> Persister le compteur imposerait une écriture PDM par commande.
 
 ---
 
@@ -839,28 +872,25 @@ qu'il attend → la gateway doit reprendre à cet index.
    Historique est inconnue : afficher des libellés génériques (`Tier1`, `Tier2`)
    plutôt que de masquer la donnée.
 
-### 11.2 Envoi de commandes (descente)
+### 11.2 Interrogation d'attribut (descente)
 
-C'est la partie à ajouter pour le bidirectionnel. Elle repose entièrement sur
-la fenêtre de 300 ms qui suit chaque uplink (§8).
+Partie optionnelle. Elle repose entièrement sur la fenêtre de 300 ms qui suit
+chaque uplink (§8).
 
 #### Ce qu'il faut mettre en place
 
-**Une file de commandes par émetteur.** Le récepteur ne choisit pas quand il
+**Une file de requêtes par émetteur.** Le récepteur ne choisit pas quand il
 émet : il doit attendre d'avoir entendu un uplink de l'émetteur visé. Une
-commande déposée par l'utilisateur reste donc en attente jusqu'au prochain
-uplink de ce ZLinky, soit jusqu'à ~7 s (ou plus si l'intervalle a été allongé).
-
-**Un compteur monotone persisté, par émetteur.** Il alimente le champ
-`compteur` du DOWNLINK_CMD. Il doit être stocké en dur (EEPROM/flash) : s'il
-repartait de 0 après un redémarrage du récepteur, toutes ses commandes seraient
-rejetées en `BAD_COUNTER` jusqu'à rattraper la valeur connue du ZLinky.
+requête reste donc en attente jusqu'au prochain uplink de ce ZLinky, soit
+jusqu'à ~7 s.
 
 **Émettre immédiatement après le RX_DONE de l'uplink.** Le budget est de
 300 ms, dont ~60 ms consommés par la détection de préambule côté ZLinky. Il
-reste largement de quoi déchiffrer, consulter la file et démarrer le TX, mais
-il ne faut pas insérer de traitement lourd entre les deux (écriture disque,
-publication MQTT, log verbeux…).
+reste de quoi déchiffrer, consulter la file et démarrer le TX, mais il ne faut
+pas insérer de traitement lourd entre les deux (écriture disque, publication
+MQTT, log verbeux…).
+
+Pas de compteur ni de confirmation à gérer : une lecture est idempotente.
 
 #### Boucle type
 
@@ -869,43 +899,29 @@ sur RX_DONE d'un uplink de l'émetteur N :
     déchiffrer, vérifier le MIC
     publier la donnée                     ← peut être fait après
     si file[N] non vide :
-        cmd = file[N].tête
-        cmd.compteur = ++compteur[N]      ← persister
-        chiffrer avec la clé de N
+        req = file[N].tête                 ← (cluster, attribut)
+        chiffrer POLL_REQUEST avec la clé de N
         transmettre immédiatement
-        passer en RX, attendre le DOWNLINK_ACK (~500 ms)
+        passer en RX, attendre le POLL_RESPONSE (~500 ms)
+        décoder selon le type ZCL renvoyé
 ```
 
-#### Séquence de changement de config
+#### Décodage de la réponse
 
-Le point délicat : **après un `SET_CHANNEL` ou un `SET_SF`, le ZLinky répond
-sur la NOUVELLE config.** Le récepteur doit basculer pour entendre l'ACK.
+Le `type ZCL` (octet [7]) dit comment lire la valeur : entier big-endian
+(uint8/16/32/48, int8/16) ou chaîne (octets bruts). Le récepteur n'a donc pas
+besoin de connaître à l'avance le type de chaque attribut.
 
-```
-1. box     émet SET_CHANNEL(7) sur l'ancien canal
-2. box     bascule immédiatement sur le canal 7
-3. box     attend le DOWNLINK_ACK(PENDING_CONFIRM) sur le canal 7
-4a. reçu     → envoyer CONFIRM au prochain uplink, la config est acquise
-4b. rien     → ne rien faire : le ZLinky restaure seul l'ancienne config
-                au bout de 60 s. Revenir sur l'ancien canal et l'y attendre.
-```
-
-Ne **jamais** considérer un changement comme acquis sans avoir reçu l'ACK sur
-la nouvelle config. Le mécanisme de retour arrière du ZLinky suppose que le
-récepteur joue le jeu : s'il persiste le nouveau canal de son côté sans
-confirmation, les deux se retrouveront désynchronisés après le rollback.
-
-Pour `SET_TX_INTERVAL`, le ZLinky répond sur le même canal — pas de bascule,
-mais le `CONFIRM` reste obligatoire, sinon l'intervalle revient à sa valeur
-précédente au bout de 60 s.
+Un statut `UNKNOWN_ATTR` (avec N = 0) signifie que le firmware ne mappe pas ce
+couple (cluster, attribut) — voir la liste en §8.
 
 #### Points d'attention
 
 | Sujet | À retenir |
 |---|---|
-| Latence | une commande attend le prochain uplink, ~7 s typiquement |
-| `BAD_COUNTER` | le compteur du récepteur a régressé — le resynchroniser au-dessus de la valeur connue du ZLinky |
-| `NOTHING_PENDING` | `CONFIRM` envoyé alors que rien n'était en attente, ou envoyé plus de 60 s après |
-| Perte de l'ACK | la commande a peut-être été appliquée quand même ; ne pas la rejouer telle quelle, le compteur serait rejeté. Réémettre avec un compteur incrémenté |
-| `ENTER_OTA` | pas de retour arrière ; le ZLinky bascule et ne répond plus aux commandes normales |
+| Latence | une requête attend le prochain uplink, ~7 s typiquement |
+| Idempotence | rejouer une requête est sans effet de bord, juste une relecture |
+| Perte de la réponse | simplement réémettre la requête au prochain uplink |
+| Fraîcheur | la valeur renvoyée est celle du dernier échantillonnage TIC (jusqu'à un cycle de retard), pas une lecture instantanée du compteur |
+| SF / canal | ne se changent PAS par ce canal — refaire un appairage (§4) |
 | Multi-émetteur | les fenêtres des différents ZLinky ne sont pas synchronisées, chacune se traite indépendamment |
