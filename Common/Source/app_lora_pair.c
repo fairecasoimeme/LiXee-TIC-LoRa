@@ -220,8 +220,16 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
         u8LedBlinkCount = 0;
         sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
 
-        /* Switch RF back to PAIR_CHANNEL for the handshake */
-        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
+        /* Reset materiel + reconfig COMPLETE sur le rendez-vous (canal 3 / SF11)
+         * IMMEDIATEMENT, sans attendre le premier tick du timer d'appairage.
+         *
+         * Le module vient de tourner en TX data + fenetre RX descendante sur la
+         * config operationnelle (canal/SF quelconques). Ne faire ici qu'un
+         * changement de frequence laissait la radio dans un etat dependant de
+         * ce que la boucle data avait pose ; l'appairage ne partait pas tant
+         * qu'on n'avait pas coupe l'alimentation. Un reset complet des l'appui
+         * remet la radio dans un etat connu. */
+        APP_vLoRaTicReconfigureRadio(LORA_PAIR_CHANNEL, LORA_PAIR_SF);
 
         /* LED fast blink (150ms) for pairing mode */
         vStartBlinkTimer(150);
