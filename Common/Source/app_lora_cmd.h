@@ -50,17 +50,20 @@
 #define LORA_ZCL_TYPE_UINT48        0x25
 #define LORA_ZCL_TYPE_INT8          0x28
 #define LORA_ZCL_TYPE_INT16         0x29
+#define LORA_ZCL_TYPE_INT32         0x2B
 #define LORA_ZCL_TYPE_OCTET_STRING  0x41
 #define LORA_ZCL_TYPE_CHAR_STRING   0x42
 
-/* Cluster IDs adressables */
+/* Cluster IDs adressables — memes identifiants que le firmware Zigbee LiXee */
 #define LORA_CLUSTER_LIXEE          0xFF66  /* cluster custom LiXee (TIC) */
 #define LORA_CLUSTER_METERING       0x0702  /* Simple Metering (index energie) */
+#define LORA_CLUSTER_ELEC_MEAS      0x0B04  /* Electrical Measurement (puissances) */
+#define LORA_CLUSTER_METER_ID       0x0B01  /* Meter Identification (PREF/PCOUP/VTIC) */
 
 /* Tailles */
 #define LORA_POLL_REQUEST_SIZE      6   /* type+seq+cluster(2)+attr(2) */
 #define LORA_POLL_RESP_HDR_SIZE     9   /* type+seq+cluster(2)+attr(2)+status+zcl_type+len */
-#define LORA_POLL_VALUE_MAX         17  /* plus grande valeur transmise (char string) */
+#define LORA_POLL_VALUE_MAX         32  /* plus grande valeur transmise (MSG1 = 32 car.) */
 #define LORA_POLL_RESP_MAX_SIZE     (LORA_POLL_RESP_HDR_SIZE + LORA_POLL_VALUE_MAX)
 
 /* Fenetre de reception ouverte apres chaque TX de donnees */

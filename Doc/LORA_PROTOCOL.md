@@ -698,7 +698,8 @@ Types ZCL utilisés :
 
 ### Clusters et attributs adressables
 
-Mêmes identifiants que le firmware Zigbee LiXee, pour que la connaissance des
+**Tous les attributs TIC disponibles sont adressables**, répartis sur 4 clusters
+aux mêmes identifiants que le firmware Zigbee LiXee — la connaissance des
 clusters se transfère d'un monde à l'autre.
 
 **Cluster LiXee `0xFF66`** (données TIC spécifiques) :
@@ -707,19 +708,35 @@ clusters se transfère d'un monde à l'autre.
 |---|---|---|
 | `0x0000` | OPTARIF | char string |
 | `0x0001` | DEMAIN | char string |
+| `0x0002` | HHPHC | uint8 |
+| `0x0003` | PPOT | uint8 |
+| `0x0004` | PEJP | uint8 |
 | `0x0005` | ADPS | uint16 |
+| `0x0006`..`0x0008` | ADIR1..ADIR3 | uint16 |
+| `0x0009` | MOTDETAT | char string |
 | `0x0010` | PTEC / LTARF (période tarifaire) | char string |
+| `0x0100` | PERIODIC_SEND | uint8 |
 | `0x0200` | LTARF | char string |
 | `0x0201` | NTARF | uint8 |
 | `0x0202` | DATE | char string |
 | `0x0203`..`0x0206` | EASD01..EASD04 | uint32 |
 | `0x0207` | SINSTI | uint16 |
 | `0x0208` | SMAXIN | uint16 |
+| `0x0209` | SMAXIN-1 | uint16 |
 | `0x0210` | CCAIN | uint16 |
+| `0x0211` | CCAIN-1 | uint16 |
+| `0x0212`..`0x0214` | SMAXSN1-1/SMAXSN2-1/SMAXSN3-1 | uint16 |
+| `0x0215` | MSG1 | char string |
+| `0x0216` | MSG2 | char string |
 | `0x0217` | STGE (8 car. hex) | char string |
 | `0x0218`..`0x0223` | DPM1/FPM1/DPM2/FPM2/DPM3/FPM3 | uint8 |
 | `0x0224` | RELAIS | uint16 |
+| `0x0225` | NJOURF | uint8 |
+| `0x0226` | NJOURF+1 | uint8 |
+| `0x0227` | PJOURF+1 (tronqué à 32 car.) | char string |
+| `0x0228` | PPOINTE (tronqué à 32 car.) | char string |
 | `0x0300` | mode Linky | uint8 |
+| `0x0400` | SMAXSN-1 | uint16 |
 
 **Cluster Simple Metering `0x0702`** (index d'énergie, transmis en uint32) :
 
@@ -727,11 +744,37 @@ clusters se transfère d'un monde à l'autre.
 |---|---|---|
 | `0x0000` | EAST (Std) / BASE (Histo) | uint32 |
 | `0x0001` | EAIT (injection) | uint32 |
-| `0x0100`..`0x0103` | index tarifaire 1 à 4 | uint32 |
+| `0x0100`..`0x0109` | index tarifaire 1 à 10 (EASF01..10) | uint32 |
 
-> Les autres clusters standard (mesure électrique `0x0B04`, identification
-> compteur `0x0B01`) ne sont pas encore mappés côté firmware : ils renvoient
-> `UNKNOWN_ATTR`. L'ajout se fait sur le même modèle dans `iBuildPollValue`.
+**Cluster Electrical Measurement `0x0B04`** (puissances, courants, tensions) :
+
+| attr | Étiquette | Type |
+|---|---|---|
+| `0x0304` | SMAXSN (puissance max active du jour) | int32 |
+| `0x0305` | ERQ1 (énergie réactive totale) | int32 |
+| `0x0306` | SINSTS total | uint32 |
+| `0x0505`/`0x0905`/`0x0A05` | URMS1/URMS2/URMS3 | uint16 |
+| `0x0508`/`0x0908`/`0x0A08` | IRMS1/IRMS2/IRMS3 (IINST en Histo) | uint16 |
+| `0x050A`/`0x090A`/`0x0A0A` | IMAX1/IMAX2/IMAX3 | uint16 |
+| `0x050B`/`0x090B` | CCASN / CCASN-1 | int16 |
+| `0x050D`/`0x090D`/`0x0A0D` | SMAXSN1/SMAXSN2/SMAXSN3 (PMAX en Histo) | int16 |
+| `0x050E`/`0x090E`/`0x0A0E` | ERQ2/ERQ3/ERQ4 | int16 |
+| `0x050F`/`0x090F`/`0x0A0F` | SINSTS1/SINSTS2/SINSTS3 (PAPP en Histo) | uint16 |
+| `0x0511`/`0x0911`/`0x0A11` | UMOY1/UMOY2/UMOY3 | uint16 |
+
+**Cluster Meter Identification `0x0B01`** (configuration compteur) :
+
+| attr | Étiquette | Type |
+|---|---|---|
+| `0x000A` | VTIC (version TIC) | uint8 |
+| `0x000C` | POD | uint16 |
+| `0x000D` | PREF (Std) / ISOUSC (Histo) | uint8 |
+| `0x000E` | PCOUP | uint8 |
+
+> Un couple (cluster, attribut) hors de ces tables renvoie `UNKNOWN_ATTR`.
+> Selon le mode (Standard/Historique) certains attributs valent 0 (non
+> renseignés par le compteur) — le récepteur les interprète comme en réception
+> normale (cf. §11.1).
 
 ### Exemple
 

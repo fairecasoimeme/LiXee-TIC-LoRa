@@ -247,133 +247,161 @@ PRIVATE void vProcessPollRequest(uint8 *pu8Buf, uint8 u8Len)
  * pour les numeriques) et renvoie sa longueur, ou -1 si l'attribut n'est pas
  * gere. *pu8Type recoit le type ZCL.
  *
- * Table volontairement extensible : ajouter un case suffit. Les clusters
- * standard non listes (mesure electrique 0x0B04, identification 0x0B01)
- * peuvent etre ajoutes sur le meme modele en pointant vers les champs
- * correspondants de sBaseDevice.
+ * Couvre TOUS les attributs TIC disponibles, repartis sur 4 clusters aux
+ * memes identifiants que le firmware Zigbee LiXee :
+ *   0xFF66 LiXee custom, 0x0702 Simple Metering, 0x0B04 Electrical
+ *   Measurement, 0x0B01 Meter Identification.
  *
  ****************************************************************************/
+
+/* Raccourcis de retour, locaux a cette fonction */
+#define POLL_U8(v)    do { *pu8Type = LORA_ZCL_TYPE_UINT8;  pu8Out[0] = (uint8)(v); return 1; } while(0)
+#define POLL_U16(v)   do { *pu8Type = LORA_ZCL_TYPE_UINT16; return u8PutU16(pu8Out, (uint16)(v)); } while(0)
+#define POLL_S16(v)   do { *pu8Type = LORA_ZCL_TYPE_INT16;  return u8PutU16(pu8Out, (uint16)(int16)(v)); } while(0)
+#define POLL_U32(v)   do { *pu8Type = LORA_ZCL_TYPE_UINT32; return u8PutU32(pu8Out, (uint32)(v)); } while(0)
+#define POLL_S32(v)   do { *pu8Type = LORA_ZCL_TYPE_INT32;  return u8PutU32(pu8Out, (uint32)(int32)(v)); } while(0)
+#define POLL_STR(p,n) do { *pu8Type = LORA_ZCL_TYPE_CHAR_STRING; return u8PutAscii(pu8Out, (p), (n)); } while(0)
+
 PRIVATE int iBuildPollValue(uint16 u16Cluster, uint16 u16Attr,
                             uint8 *pu8Type, uint8 *pu8Out)
 {
+    tsCLD_Linky *pL = &sBaseDevice.sLinkyServerCluster;
+
+    /* ================= Cluster LiXee 0xFF66 (donnees TIC) ================= */
     if (u16Cluster == LORA_CLUSTER_LIXEE)
     {
         switch (u16Attr)
         {
-        case E_CLD_LINKY_OPTARIF:
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkyOptarif, 16);
-
-        case E_CLD_LINKY_DEMAIN:
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkyDemain, 4);
-
-        case E_CLD_LINKY_ADPS:
-            *pu8Type = LORA_ZCL_TYPE_UINT16;
-            return u8PutU16(pu8Out, sBaseDevice.sLinkyServerCluster.au16LinkyADPS);
-
-        case E_CLD_LINKY_TARIFPERIOD:
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkyTarifPeriod, 16);
-
-        case E_CLD_LINKY_STANDARD_LTARF:
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkyLTARF, 16);
-
-        case E_CLD_LINKY_STANDARD_NTARF:
-            *pu8Type = LORA_ZCL_TYPE_UINT8;
-            pu8Out[0] = sBaseDevice.sLinkyServerCluster.au8LinkyNTARF;
-            return 1;
-
-        case E_CLD_LINKY_STANDARD_DATE:
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkyDATE, 13);
-
-        case E_CLD_LINKY_STANDARD_EASD01:
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, sBaseDevice.sLinkyServerCluster.u32LinkyEASD01);
-        case E_CLD_LINKY_STANDARD_EASD02:
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, sBaseDevice.sLinkyServerCluster.u32LinkyEASD02);
-        case E_CLD_LINKY_STANDARD_EASD03:
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, sBaseDevice.sLinkyServerCluster.u32LinkyEASD03);
-        case E_CLD_LINKY_STANDARD_EASD04:
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, sBaseDevice.sLinkyServerCluster.u32LinkyEASD04);
-
-        case E_CLD_LINKY_STANDARD_SINSTI:
-            *pu8Type = LORA_ZCL_TYPE_UINT16;
-            return u8PutU16(pu8Out, sBaseDevice.sLinkyServerCluster.u16LinkySINSTI);
-        case E_CLD_LINKY_STANDARD_SMAXIN:
-            *pu8Type = LORA_ZCL_TYPE_UINT16;
-            return u8PutU16(pu8Out, sBaseDevice.sLinkyServerCluster.u16LinkySMAXIN);
-        case E_CLD_LINKY_STANDARD_CCAIN:
-            *pu8Type = LORA_ZCL_TYPE_UINT16;
-            return u8PutU16(pu8Out, sBaseDevice.sLinkyServerCluster.u16LinkyCCAIN);
-
-        case E_CLD_LINKY_STANDARD_STGE:
-            /* Stocke en 8 caracteres hex ASCII */
-            *pu8Type = LORA_ZCL_TYPE_CHAR_STRING;
-            return u8PutAscii(pu8Out, sBaseDevice.sLinkyServerCluster.au8LinkySTGE, 8);
-
-        case E_CLD_LINKY_STANDARD_DPM1:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyDPM1; return 1;
-        case E_CLD_LINKY_STANDARD_FPM1:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyFPM1; return 1;
-        case E_CLD_LINKY_STANDARD_DPM2:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyDPM2; return 1;
-        case E_CLD_LINKY_STANDARD_FPM2:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyFPM2; return 1;
-        case E_CLD_LINKY_STANDARD_DPM3:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyDPM3; return 1;
-        case E_CLD_LINKY_STANDARD_FPM3:
-            *pu8Type = LORA_ZCL_TYPE_UINT8; pu8Out[0] = sBaseDevice.sLinkyServerCluster.u8LinkyFPM3; return 1;
-
-        case E_CLD_LINKY_STANDARD_RELAIS:
-            *pu8Type = LORA_ZCL_TYPE_UINT16;
-            return u8PutU16(pu8Out, sBaseDevice.sLinkyServerCluster.u16LinkyRELAIS);
-
-        case E_CLD_LINKY_MODE:
-            *pu8Type = LORA_ZCL_TYPE_UINT8;
-            pu8Out[0] = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
-            return 1;
-
-        default:
-            return -1;
+        case E_CLD_LINKY_OPTARIF:          POLL_STR(pL->au8LinkyOptarif, 16);
+        case E_CLD_LINKY_DEMAIN:           POLL_STR(pL->au8LinkyDemain, 4);
+        case E_CLD_LINKY_HHPHC:            POLL_U8 (pL->au8LinkyHHPHC);
+        case E_CLD_LINKY_PPOT:             POLL_U8 (pL->au8LinkyPPOT);
+        case E_CLD_LINKY_PEJP:             POLL_U8 (pL->au8LinkyPEJP);
+        case E_CLD_LINKY_ADPS:             POLL_U16(pL->au16LinkyADPS);
+        case E_CLD_LINKY_ADIR1:            POLL_U16(pL->au16LinkyADIR1);
+        case E_CLD_LINKY_ADIR2:            POLL_U16(pL->au16LinkyADIR2);
+        case E_CLD_LINKY_ADIR3:            POLL_U16(pL->au16LinkyADIR3);
+        case E_CLD_LINKY_MOTDETAT:         POLL_STR(pL->au8LinkyMOTDETAT, 6);
+        case E_CLD_LINKY_TARIFPERIOD:      POLL_STR(pL->au8LinkyTarifPeriod, 16);
+        case E_CLD_LINKY_PERIODIC_SEND:    POLL_U8 (pL->au8LinkyPeriodicSend);
+        case E_CLD_LINKY_STANDARD_LTARF:   POLL_STR(pL->au8LinkyLTARF, 16);
+        case E_CLD_LINKY_STANDARD_NTARF:   POLL_U8 (pL->au8LinkyNTARF);
+        case E_CLD_LINKY_STANDARD_DATE:    POLL_STR(pL->au8LinkyDATE, 13);
+        case E_CLD_LINKY_STANDARD_EASD01:  POLL_U32(pL->u32LinkyEASD01);
+        case E_CLD_LINKY_STANDARD_EASD02:  POLL_U32(pL->u32LinkyEASD02);
+        case E_CLD_LINKY_STANDARD_EASD03:  POLL_U32(pL->u32LinkyEASD03);
+        case E_CLD_LINKY_STANDARD_EASD04:  POLL_U32(pL->u32LinkyEASD04);
+        case E_CLD_LINKY_STANDARD_SINSTI:  POLL_U16(pL->u16LinkySINSTI);
+        case E_CLD_LINKY_STANDARD_SMAXIN:  POLL_U16(pL->u16LinkySMAXIN);
+        case E_CLD_LINKY_STANDARD_SMAXIN_1:POLL_U16(pL->u16LinkySMAXIN_1);
+        case E_CLD_LINKY_STANDARD_CCAIN:   POLL_U16(pL->u16LinkyCCAIN);
+        case E_CLD_LINKY_STANDARD_CCAIN_1: POLL_U16(pL->u16LinkyCCAIN_1);
+        case E_CLD_LINKY_STANDARD_SMAXSN1_1: POLL_U16(pL->u16LinkySMAXSN1_1);
+        case E_CLD_LINKY_STANDARD_SMAXSN2_1: POLL_U16(pL->u16LinkySMAXSN2_1);
+        case E_CLD_LINKY_STANDARD_SMAXSN3_1: POLL_U16(pL->u16LinkySMAXSN3_1);
+        case E_CLD_LINKY_STANDARD_MSG1:    POLL_STR(pL->au8LinkyMSG1, 32);
+        case E_CLD_LINKY_STANDARD_MSG2:    POLL_STR(pL->au8LinkyMSG2, 16);
+        case E_CLD_LINKY_STANDARD_STGE:    POLL_STR(pL->au8LinkySTGE, 8); /* 8 car. hex */
+        case E_CLD_LINKY_STANDARD_DPM1:    POLL_U8 (pL->u8LinkyDPM1);
+        case E_CLD_LINKY_STANDARD_FPM1:    POLL_U8 (pL->u8LinkyFPM1);
+        case E_CLD_LINKY_STANDARD_DPM2:    POLL_U8 (pL->u8LinkyDPM2);
+        case E_CLD_LINKY_STANDARD_FPM2:    POLL_U8 (pL->u8LinkyFPM2);
+        case E_CLD_LINKY_STANDARD_DPM3:    POLL_U8 (pL->u8LinkyDPM3);
+        case E_CLD_LINKY_STANDARD_FPM3:    POLL_U8 (pL->u8LinkyFPM3);
+        case E_CLD_LINKY_STANDARD_RELAIS:  POLL_U16(pL->u16LinkyRELAIS);
+        case E_CLD_LINKY_STANDARD_NJOURF:  POLL_U8 (pL->u8LinkyNJOURF);
+        case E_CLD_LINKY_STANDARD_NJOURF1: POLL_U8 (pL->u8LinkyNJOURF1);
+        case E_CLD_LINKY_STANDARD_PJOURF1: POLL_STR(pL->au8LinkyPJOURF1, 32);
+        case E_CLD_LINKY_STANDARD_PPOINTE: POLL_STR(pL->au8LinkyPPOINTE, 32);
+        case E_CLD_LINKY_MODE:             POLL_U8 (pL->au8LinkyMode);
+        case E_CLD_LINKY_STANDARD_SMAXSN_1: POLL_U16(pL->u16LinkySMAXSN_1);
+        default:                           return -1;
         }
     }
-    else if (u16Cluster == LORA_CLUSTER_METERING)
+
+    /* ============= Cluster Simple Metering 0x0702 (index Wh) =============
+     * Valeurs 48 bits mais l'energie TIC tient sur 32 : on transmet 4 octets,
+     * comme les paquets ENERGY. Tier N = 0x0100 + (N-1). */
+    if (u16Cluster == LORA_CLUSTER_METERING)
     {
-        /* Index d'energie. Valeur stockee sur 48 bits mais TIC tient sur 32
-         * (Wh) : on transmet 4 octets, comme les paquets ENERGY. */
+        tsCLD_SimpleMetering *pM = &sBaseDevice.sSimpleMeteringServerCluster;
         switch (u16Attr)
         {
-        case E_CLD_SM_ATTR_ID_CURRENT_SUMMATION_DELIVERED:   /* 0x0000 EAST/BASE */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentSummationDelivered);
-        case E_CLD_SM_ATTR_ID_CURRENT_SUMMATION_RECEIVED:    /* 0x0001 EAIT */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentSummationReceived);
-        case E_CLD_SM_ATTR_ID_CURRENT_TIER_1_SUMMATION_DELIVERED:       /* 0x0100 */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentTier1SummationDelivered);
-        case (E_CLD_SM_ATTR_ID_CURRENT_TIER_1_SUMMATION_DELIVERED + 1): /* 0x0101 Tier2 */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentTier2SummationDelivered);
-        case (E_CLD_SM_ATTR_ID_CURRENT_TIER_1_SUMMATION_DELIVERED + 2): /* 0x0102 Tier3 */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentTier3SummationDelivered);
-        case (E_CLD_SM_ATTR_ID_CURRENT_TIER_1_SUMMATION_DELIVERED + 3): /* 0x0103 Tier4 */
-            *pu8Type = LORA_ZCL_TYPE_UINT32;
-            return u8PutU32(pu8Out, (uint32)sBaseDevice.sSimpleMeteringServerCluster.u48CurrentTier4SummationDelivered);
-        default:
-            return -1;
+        case 0x0000: POLL_U32(pM->u48CurrentSummationDelivered);  /* EAST/BASE */
+        case 0x0001: POLL_U32(pM->u48CurrentSummationReceived);   /* EAIT */
+        case 0x0100: POLL_U32(pM->u48CurrentTier1SummationDelivered);
+        case 0x0101: POLL_U32(pM->u48CurrentTier2SummationDelivered);
+        case 0x0102: POLL_U32(pM->u48CurrentTier3SummationDelivered);
+        case 0x0103: POLL_U32(pM->u48CurrentTier4SummationDelivered);
+        case 0x0104: POLL_U32(pM->u48CurrentTier5SummationDelivered);
+        case 0x0105: POLL_U32(pM->u48CurrentTier6SummationDelivered);
+        case 0x0106: POLL_U32(pM->u48CurrentTier7SummationDelivered);
+        case 0x0107: POLL_U32(pM->u48CurrentTier8SummationDelivered);
+        case 0x0108: POLL_U32(pM->u48CurrentTier9SummationDelivered);
+        case 0x0109: POLL_U32(pM->u48CurrentTier10SummationDelivered);
+        default:     return -1;
+        }
+    }
+
+    /* ========= Cluster Electrical Measurement 0x0B04 (puissances) =========
+     * IDs ZCL standard. Puissances actives/reactives signees (int). */
+    if (u16Cluster == LORA_CLUSTER_ELEC_MEAS)
+    {
+        tsCLD_ElectricalMeasurement *pE = &sBaseDevice.sElectricalMeasurement;
+        switch (u16Attr)
+        {
+        case 0x0304: POLL_S32(pE->i32TotalActivePower);      /* SMAXSN (jour) */
+        case 0x0305: POLL_S32(pE->i32TotalReactivePower);    /* ERQ1 */
+        case 0x0306: POLL_U32(pE->u32TotalApparentPower);    /* SINSTS total */
+        case 0x0505: POLL_U16(pE->u16RMSVoltage);            /* URMS1 */
+        case 0x0508: POLL_U16(pE->u16RMSCurrent);            /* IRMS1 / IINST1 */
+        case 0x050A: POLL_U16(pE->u16RMSCurrentMax);         /* IMAX1 */
+        case 0x050B: POLL_S16(pE->i16ActivePower);           /* CCASN */
+        case 0x050D: POLL_S16(pE->i16ActivePowerMax);        /* SMAXSN1 / PMAX */
+        case 0x050E: POLL_S16(pE->i16ReactivePower);         /* ERQ2 */
+        case 0x050F: POLL_U16(pE->u16ApparentPower);         /* SINSTS1 / PAPP */
+        case 0x0511: POLL_U16(pE->u16AverageRMSVoltageMeasurementPeriod);     /* UMOY1 */
+        case 0x0905: POLL_U16(pE->u16RMSVoltagePhB);         /* URMS2 */
+        case 0x0908: POLL_U16(pE->u16RMSCurrentPhB);         /* IRMS2 / IINST2 */
+        case 0x090A: POLL_U16(pE->u16RMSCurrentMaxPhB);      /* IMAX2 */
+        case 0x090B: POLL_S16(pE->i16ActivePowerPhB);        /* CCASN-1 */
+        case 0x090D: POLL_S16(pE->i16ActivePowerMaxPhB);     /* SMAXSN2 */
+        case 0x090E: POLL_S16(pE->i16ReactivePowerPhB);      /* ERQ3 */
+        case 0x090F: POLL_U16(pE->u16ApparentPowerPhB);      /* SINSTS2 */
+        case 0x0911: POLL_U16(pE->u16AverageRMSVoltageMeasurementPeriodPhB);  /* UMOY2 */
+        case 0x0A05: POLL_U16(pE->u16RMSVoltagePhC);         /* URMS3 */
+        case 0x0A08: POLL_U16(pE->u16RMSCurrentPhC);         /* IRMS3 / IINST3 */
+        case 0x0A0A: POLL_U16(pE->u16RMSCurrentMaxPhC);      /* IMAX3 */
+        case 0x0A0D: POLL_S16(pE->i16ActivePowerMaxPhC);     /* SMAXSN3 */
+        case 0x0A0E: POLL_S16(pE->i16ReactivePowerPhC);      /* ERQ4 */
+        case 0x0A0F: POLL_U16(pE->u16ApparentPowerPhC);      /* SINSTS3 */
+        case 0x0A11: POLL_U16(pE->u16AverageRMSVoltageMeasurementPeriodPhC);  /* UMOY3 */
+        default:     return -1;
+        }
+    }
+
+    /* ========= Cluster Meter Identification 0x0B01 (config compteur) ======= */
+    if (u16Cluster == LORA_CLUSTER_METER_ID)
+    {
+        switch (u16Attr)
+        {
+        case 0x000A: POLL_U8 (sBaseDevice.sMeterIdentification.au8LinkyMISoftwareRevision); /* VTIC */
+        case 0x000C: POLL_U16(sBaseDevice.sMeterIdentification.au16LinkyMIPOD);             /* POD */
+        case 0x000D: POLL_U8 (sBaseDevice.sMeterIdentification.au8LinkyMIAvailablePower);   /* PREF/ISOUSC */
+        case 0x000E: POLL_U8 (sBaseDevice.sMeterIdentification.au8LinkyMIPowerThreshold);   /* PCOUP */
+        default:     return -1;
         }
     }
 
     return -1;   /* cluster non gere */
 }
+
+#undef POLL_U8
+#undef POLL_U16
+#undef POLL_S16
+#undef POLL_U32
+#undef POLL_S32
+#undef POLL_STR
 
 /****************************************************************************
  *

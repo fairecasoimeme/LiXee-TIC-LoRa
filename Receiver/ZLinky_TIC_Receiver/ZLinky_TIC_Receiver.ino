@@ -77,7 +77,7 @@ uint32_t totalResets = 0;
 
 /* Tailles paquets pairing */
 #define PAIR_REQUEST_SIZE   11
-#define PAIR_RESPONSE_SIZE  20   /* +1 byte op_channel a la fin */
+#define PAIR_RESPONSE_SIZE  21   /* + op_channel [19] + op_SF [20] */
 #define PAIR_CONFIRM_SIZE   15
 
 /* ====== LoRa channel plan (must match emitter firmware) ====== */
@@ -105,6 +105,14 @@ const float LORA_CHANNEL_FREQS_MHZ[LORA_NUM_CHANNELS] = {
 
 uint8_t opChannel = LORA_PAIR_CHANNEL;
 bool isChannelInitialized = false;
+
+/* Spreading factor operationnel du reseau (7..12). Assigne aux ZLinky lors de
+ * l'appairage (PAIR_RESPONSE byte[20]). L'appairage lui-meme se fait toujours
+ * a SF11 (rendez-vous fixe), les donnees a opSF. */
+#define PAIR_SF     11    /* SF du rendez-vous d'appairage (fixe) */
+#define SF_MIN       7
+#define SF_MAX      12
+uint8_t opSF = 11;
 
 /* Sous-types extended (byte[2]) */
 #define EXT_CURRENT_VOLTAGE  0x00
@@ -147,13 +155,29 @@ struct PairedEmitter {
 PairedEmitter emitters[MAX_PAIRED_EMITTERS];
 int currentPairingSlot = -1;  /* slot used during a pairing handshake */
 
+/* ====== Lecture d'attribut a la demande (POLL) ======
+ * Une requete par emetteur, en attente jusqu'a ce qu'on entende son prochain
+ * uplink : c'est le seul moment ou sa fenetre de reception est ouverte. */
+#define PKT_TYPE_POLL_REQUEST   0x0B
+#define PKT_TYPE_POLL_RESPONSE  0x0C
+#define POLL_RESP_TIMEOUT_MS    600
+
+struct PendingPoll {
+  bool     valid;
+  uint16_t cluster;
+  uint16_t attr;
+};
+PendingPoll pendingPoll[MAX_PAIRED_EMITTERS];
+uint8_t pollSeq = 0;
+
 /* ====== EEPROM layout (multi-emitter) ====== */
 /* Bumped magic: 0x4C505251 ("LPRQ") to invalidate single-emitter records */
 #define EEPROM_SIZE        256   /* enough for headers + 4 emitter records */
 #define EEPROM_MAGIC_ADDR    0   /* uint32 magic (4B) */
 #define EEPROM_OPCH_ADDR     4   /* op_channel (1B) */
 #define EEPROM_COUNT_ADDR    5   /* number of valid emitter records (1B) */
-#define EEPROM_RESERVED_ADDR 6   /* 2B reserved */
+#define EEPROM_OPSF_ADDR     6   /* op_SF (1B) — ex-reserved */
+#define EEPROM_RESERVED_ADDR 7   /* 1B reserved */
 #define EEPROM_EMITTERS_BASE 8   /* start of emitter records, 25 bytes each */
 #define EEPROM_EMITTER_SIZE  25  /* 1 (valid) + 8 (mac) + 16 (key) */
 #define EEPROM_MAGIC_VAL     0x4C505251  /* "LPRQ" */
@@ -452,6 +476,38 @@ void setChannel(uint8_t ch) {
   }
 }
 
+/* Applique un spreading factor (7..12) a la radio. */
+void setSF(uint8_t sf) {
+  if (sf < SF_MIN || sf > SF_MAX) {
+    Serial.print(F("[SF] Invalid SF "));
+    Serial.print(sf);
+    Serial.print(F(", fallback to "));
+    Serial.println(PAIR_SF);
+    sf = PAIR_SF;
+  }
+  radio.standby();
+  int s = radio.setSpreadingFactor(sf);
+  if (s != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[SF] setSpreadingFactor FAILED: "));
+    Serial.println(s);
+  } else {
+    Serial.print(F("[SF] SF"));
+    Serial.println(sf);
+  }
+}
+
+/* Config operationnelle : canal + SF assignes au reseau. */
+void setRadioOp() {
+  setChannel(opChannel);
+  setSF(opSF);
+}
+
+/* Rendez-vous d'appairage : canal 3 + SF11, fixes. */
+void setRadioPairing() {
+  setChannel(LORA_PAIR_CHANNEL);
+  setSF(PAIR_SF);
+}
+
 /* CCA scan : pour chaque canal, mesurer RSSI au repos pendant 100ms.
  * Retourne l'index du canal le plus calme (RSSI le plus bas). */
 uint8_t ccaScan() {
@@ -672,6 +728,14 @@ void loadPairingFromEEPROM() {
     opChannel = LORA_PAIR_CHANNEL;
   }
 
+  /* Load op_SF */
+  uint8_t storedSF = EEPROM.read(EEPROM_OPSF_ADDR);
+  if (storedSF >= SF_MIN && storedSF <= SF_MAX) {
+    opSF = storedSF;
+  } else {
+    opSF = PAIR_SF;   /* EEPROM vierge (0xFF) ou invalide → SF11 */
+  }
+
   uint8_t count = EEPROM.read(EEPROM_COUNT_ADDR);
   if (count > MAX_PAIRED_EMITTERS) count = MAX_PAIRED_EMITTERS;
 
@@ -723,6 +787,7 @@ void savePairingToEEPROM() {
 
   EEPROM.update(EEPROM_OPCH_ADDR, opChannel);
   EEPROM.update(EEPROM_COUNT_ADDR, (uint8_t)countPairedEmitters());
+  EEPROM.update(EEPROM_OPSF_ADDR, opSF);
 
   for (int slot = 0; slot < MAX_PAIRED_EMITTERS; slot++) {
     int base = EEPROM_EMITTERS_BASE + slot * EEPROM_EMITTER_SIZE;
@@ -841,14 +906,16 @@ void generateRandomKey(uint8_t *key) {
 }
 
 /**
- * Send PAIR_RESPONSE packet (20 bytes):
+ * Send PAIR_RESPONSE packet (21 bytes):
  *   [0]     0x14 (v1, pair_response)
  *   [1]     seq (echo from request)
  *   [2-17]  netKey[0..15] AES-128 key
  *   [18]    status 0x00 = OK
  *   [19]    op_channel (0..7)  - emitter switches to this for data
+ *   [20]    op_SF (7..12)      - spreading factor for data
  *
- * After TX, the radio is switched to op_channel to listen for PAIR_CONFIRM.
+ * L'appairage se fait a SF11 (rendez-vous). Apres le PAIR_RESPONSE, on bascule
+ * sur (op_channel, op_SF) : c'est la que l'emetteur envoie le PAIR_CONFIRM.
  */
 bool sendPairResponse(uint8_t seq) {
   uint8_t pkt[PAIR_RESPONSE_SIZE];
@@ -857,12 +924,15 @@ bool sendPairResponse(uint8_t seq) {
   pkt[1] = seq;
   memcpy(&pkt[2], netKey, AES_KEY_SIZE);
   pkt[18] = 0x00;        /* status OK */
-  pkt[19] = opChannel;   /* tell emitter which channel to use for ops */
+  pkt[19] = opChannel;   /* canal operationnel assigne */
+  pkt[20] = opSF;        /* spreading factor operationnel assigne */
 
   Serial.print(F("[PAIR] TX PAIR_RESPONSE seq="));
   Serial.print(seq);
   Serial.print(F(" op_channel="));
   Serial.print(opChannel);
+  Serial.print(F(" op_SF="));
+  Serial.print(opSF);
   Serial.print(F(" Key="));
   for (int i = 0; i < AES_KEY_SIZE; i++) {
     if (netKey[i] < 0x10) Serial.print('0');
@@ -870,7 +940,7 @@ bool sendPairResponse(uint8_t seq) {
   }
   Serial.println();
 
-  /* Switch to TX (still on PAIR_CHANNEL where we received PAIR_REQUEST) */
+  /* Switch to TX (still on PAIR_CHANNEL / SF11 where we received PAIR_REQUEST) */
   radio.clearDio1Action();
   int state = radio.transmit(pkt, PAIR_RESPONSE_SIZE);
 
@@ -883,8 +953,9 @@ bool sendPairResponse(uint8_t seq) {
   }
   Serial.println(F("[PAIR] PAIR_RESPONSE sent OK"));
 
-  /* Switch RF to op_channel : that's where the emitter will send PAIR_CONFIRM */
-  setChannel(opChannel);
+  /* Bascule sur la config operationnelle (canal + SF) : c'est la que
+   * l'emetteur envoie le PAIR_CONFIRM. */
+  setRadioOp();
   radio.setDio1Action(rxDone);
   radio.startReceive(0xFFFF);
   return true;
@@ -1782,6 +1853,117 @@ static int encryptOtaPacket(uint8_t *pkt, int len, const uint8_t *key, const uin
   return len + CRYPT_MIC_SIZE;
 }
 
+/* ====================================================================== */
+/* ====== POLL : lecture d'attribut a la demande ====== */
+/* ====================================================================== */
+
+/* Decode et affiche un POLL_RESPONSE dechiffre (MIC deja retire).
+ * Format : [0]type [1]seq [2-3]cluster [4-5]attr [6]status [7]zcl_type
+ *          [8]len [9..]valeur (big-endian pour les numeriques). */
+void decodePollResponse(const uint8_t *buf, int plainLen, int slot) {
+  uint16_t cluster = ((uint16_t)buf[2] << 8) | buf[3];
+  uint16_t attr    = ((uint16_t)buf[4] << 8) | buf[5];
+  uint8_t  status  = buf[6];
+  uint8_t  zclType = buf[7];
+  uint8_t  vlen    = buf[8];
+
+  Serial.println(F("---------- POLL RESPONSE ----------"));
+  Serial.print(F("  slot="));   Serial.print(slot);
+  Serial.print(F(" cluster=0x")); Serial.print(cluster, HEX);
+  Serial.print(F(" attr=0x"));    Serial.println(attr, HEX);
+
+  if (status != 0x00) {
+    Serial.print(F("  status=0x")); Serial.print(status, HEX);
+    Serial.println(status == 0x01 ? F(" (UNKNOWN_ATTR)") : F(" (erreur)"));
+    Serial.println(F("-----------------------------------\r\n"));
+    return;
+  }
+  if (9 + vlen > plainLen) { Serial.println(F("  (trame incoherente)")); return; }
+
+  const uint8_t *v = &buf[9];
+  Serial.print(F("  valeur : "));
+  switch (zclType) {
+    case 0x20: Serial.println((uint32_t)v[0]); break;                         /* uint8 */
+    case 0x28: Serial.println((int8_t)v[0]); break;                           /* int8 */
+    case 0x21: Serial.println((uint32_t)(((uint16_t)v[0]<<8)|v[1])); break;   /* uint16 */
+    case 0x29: Serial.println((int16_t)(((uint16_t)v[0]<<8)|v[1])); break;    /* int16 */
+    case 0x23:                                                                /* uint32 */
+      Serial.println(((uint32_t)v[0]<<24)|((uint32_t)v[1]<<16)|((uint32_t)v[2]<<8)|v[3]); break;
+    case 0x2B: {                                                              /* int32 */
+      int32_t s = ((uint32_t)v[0]<<24)|((uint32_t)v[1]<<16)|((uint32_t)v[2]<<8)|v[3];
+      Serial.println(s); break;
+    }
+    case 0x25: {                                                             /* uint48 */
+      uint64_t u = 0; for (int i=0;i<6;i++) u=(u<<8)|v[i];
+      Serial.println((unsigned long)u); break;
+    }
+    case 0x41: case 0x42: {                                                  /* string */
+      for (int i=0;i<vlen;i++) Serial.write(v[i]);
+      Serial.println();
+      break;
+    }
+    default:
+      Serial.print(F("(type 0x")); Serial.print(zclType, HEX); Serial.print(F(") "));
+      for (int i=0;i<vlen;i++) { if(v[i]<0x10)Serial.print('0'); Serial.print(v[i],HEX); }
+      Serial.println();
+  }
+  Serial.println(F("-----------------------------------\r\n"));
+}
+
+/* Emet un POLL_REQUEST vers l'emetteur du slot (sa fenetre RX vient de
+ * s'ouvrir, juste apres l'uplink qu'on vient de recevoir), puis attend le
+ * POLL_RESPONSE. A appeler immediatement apres traitement de l'uplink. */
+void sendPollAndWait(int slot) {
+  if (slot < 0 || slot >= MAX_PAIRED_EMITTERS || !emitters[slot].valid) return;
+  PairedEmitter &em = emitters[slot];
+
+  uint8_t pkt[6 + CRYPT_MIC_SIZE];
+  pkt[0] = (0x01 << 4) | PKT_TYPE_POLL_REQUEST;   /* 0x1B */
+  pkt[1] = pollSeq++;
+  pkt[2] = (uint8_t)(pendingPoll[slot].cluster >> 8);
+  pkt[3] = (uint8_t)(pendingPoll[slot].cluster & 0xFF);
+  pkt[4] = (uint8_t)(pendingPoll[slot].attr >> 8);
+  pkt[5] = (uint8_t)(pendingPoll[slot].attr & 0xFF);
+  int txLen = encryptOtaPacket(pkt, 6, em.key, em.mac);
+
+  radio.clearDio1Action();
+  int s = radio.transmit(pkt, txLen);
+  radio.setDio1Action(rxDone);
+  rxFlag = false;
+  radio.startReceive(0xFFFF);
+
+  if (s != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[POLL] TX fail ")); Serial.println(s);
+    pendingPoll[slot].valid = false;
+    return;
+  }
+
+  unsigned long deadline = millis() + POLL_RESP_TIMEOUT_MS;
+  while (millis() < deadline) {
+    if (rxFlag) {
+      rxFlag = false;
+      uint8_t buf[64];
+      int len = radio.getPacketLength();
+      if (len > 0 && len <= (int)sizeof(buf) &&
+          radio.readData(buf, len) == RADIOLIB_ERR_NONE) {
+        if (decryptPacket(buf, len, em.key, em.mac, false)) {
+          int plainLen = len - CRYPT_MIC_SIZE;
+          if (plainLen >= 9 && (buf[0] & 0x0F) == PKT_TYPE_POLL_RESPONSE) {
+            decodePollResponse(buf, plainLen, slot);
+            pendingPoll[slot].valid = false;
+            radio.startReceive(0xFFFF);
+            return;
+          }
+        }
+      }
+      radio.startReceive(0xFFFF);
+    }
+  }
+  Serial.print(F("[POLL] timeout slot ")); Serial.println(slot);
+  pendingPoll[slot].valid = false;
+  radio.startReceive(0xFFFF);
+}
+
 /* Send a raw OTA packet via LoRa, wait for OTA_ACK, decrypt + return payload.
  * Returns length of decrypted ACK payload (without MIC) or 0 on timeout. */
 static int otaTxAndWaitAck(uint8_t *pktClear, int clearLen, uint8_t *ackOut, int ackMaxLen) {
@@ -2001,7 +2183,7 @@ void setup() {
     }
   }
 
-  setChannel(opChannel);
+  setRadioOp();   /* canal + SF operationnels */
   radio.setDio1Action(rxDone);
 
   state = radio.startReceive(0xFFFF);
@@ -2023,8 +2205,10 @@ void setup() {
 
   Serial.println(F("[CMD] Serial commands :"));
   Serial.println(F("       'C N'           set op_channel = N (0..7), erase ALL"));
+  Serial.println(F("       'F N'           set op_SF = N (7..12), erase ALL"));
   Serial.println(F("       'S'             show status"));
   Serial.println(F("       'P'             enter PAIR_LISTEN (30s)"));
+  Serial.println(F("       'Q s cl at'     poll attribut (hex) : Q 0 FF66 300"));
   Serial.println(F("       'R N'           remove emitter at slot N"));
   Serial.println(F("       'E'             erase ALL pairings"));
   Serial.println(F("       'OTA_GW_INIT M' enter OTA gateway mode for MAC=M"));
@@ -2066,13 +2250,67 @@ void handleSerialCommand() {
     Serial.println(F("[CMD] Erasing pairing — re-pair all emitters required"));
     erasePairingFromEEPROM();
     opChannel = n;
-    setChannel(opChannel);
+    setRadioOp();
     /* Save the new channel even without pair (so it persists on reboot) */
     /* On l'ecrit directement, le magic reste invalide tant que pas paire */
     EEPROM.update(EEPROM_OPCH_ADDR, opChannel);
     rxPairState = RX_IDLE;
     radio.startReceive(0xFFFF);
     Serial.println(F("[CMD] Done. Long press USER button to enter pairing mode."));
+  }
+  else if (cmd == 'F' || cmd == 'f') {
+    /* Regle le spreading factor operationnel du reseau. Comme le SF est
+     * negocie a l'appairage, changer le SF impose de re-appairer. */
+    while (!Serial.available()) { delay(1); }
+    int sf = Serial.parseInt();
+    if (sf < SF_MIN || sf > SF_MAX) {
+      Serial.print(F("[CMD] Invalid SF "));
+      Serial.print(sf);
+      Serial.print(F(", must be "));
+      Serial.print(SF_MIN);
+      Serial.print(F(".."));
+      Serial.println(SF_MAX);
+      return;
+    }
+    Serial.print(F("[CMD] Setting op_SF = SF"));
+    Serial.println(sf);
+    Serial.println(F("[CMD] Erasing pairing — re-pair all emitters required"));
+    erasePairingFromEEPROM();
+    opSF = (uint8_t)sf;
+    setRadioOp();
+    EEPROM.update(EEPROM_OPSF_ADDR, opSF);
+    rxPairState = RX_IDLE;
+    radio.startReceive(0xFFFF);
+    Serial.println(F("[CMD] Done. Long press USER button to enter pairing mode."));
+  }
+  else if (cmd == 'Q' || cmd == 'q') {
+    /* "Q <slot> <cluster_hex> <attr_hex>" : arme une lecture d'attribut.
+     * Envoyee au prochain uplink de l'emetteur de ce slot. */
+    char line[48];
+    int n = 0;
+    unsigned long dl = millis() + 100;
+    while (millis() < dl && n < (int)sizeof(line) - 1) {
+      if (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') break;
+        line[n++] = c;
+      }
+    }
+    line[n] = 0;
+    int slot; unsigned int cl, at;
+    if (sscanf(line, "%d %x %x", &slot, &cl, &at) == 3 &&
+        slot >= 0 && slot < MAX_PAIRED_EMITTERS && emitters[slot].valid) {
+      pendingPoll[slot].valid   = true;
+      pendingPoll[slot].cluster = (uint16_t)cl;
+      pendingPoll[slot].attr    = (uint16_t)at;
+      Serial.print(F("[POLL] arme slot "));   Serial.print(slot);
+      Serial.print(F(" cluster=0x"));         Serial.print(cl, HEX);
+      Serial.print(F(" attr=0x"));            Serial.println(at, HEX);
+      Serial.println(F("[POLL] envoi au prochain uplink de ce ZLinky"));
+    } else {
+      Serial.println(F("[POLL] usage: Q <slot> <cluster_hex> <attr_hex>"));
+      Serial.println(F("       ex: Q 0 FF66 300  (mode Linky du slot 0)"));
+    }
   }
   else if (cmd == 'S' || cmd == 's') {
     Serial.println(F("\r\n========== STATUS =========="));
@@ -2081,6 +2319,8 @@ void handleSerialCommand() {
     Serial.print(F(" ("));
     Serial.print(LORA_CHANNEL_FREQS_MHZ[opChannel], 0);
     Serial.println(F(" MHz)"));
+    Serial.print(F("op_SF      = SF"));
+    Serial.println(opSF);
     Serial.print(F("Paired emitters : "));
     Serial.print(countPairedEmitters());
     Serial.print(F("/"));
@@ -2144,7 +2384,7 @@ void handleSerialCommand() {
     rxPairState = RX_PAIR_LISTEN;
     pairListenStart = millis();
     /* Note: on garde les emitters deja paired */
-    setChannel(LORA_PAIR_CHANNEL);
+    setRadioPairing();   /* canal 3 + SF11 : rendez-vous d'appairage */
     radio.setDio1Action(rxDone);
     radio.startReceive(0xFFFF);
   }
@@ -2219,8 +2459,8 @@ void loop() {
         Serial.print(LORA_CHANNEL_FREQS_MHZ[opChannel], 0);
         Serial.println(F(" MHz)"));
 
-        /* Switch radio to PAIR_CHANNEL pour ecouter PAIR_REQUEST */
-        setChannel(LORA_PAIR_CHANNEL);
+        /* Rendez-vous d'appairage : canal 3 + SF11 */
+        setRadioPairing();
         radio.setDio1Action(rxDone);
         radio.startReceive(0xFFFF);
       } else {
@@ -2237,8 +2477,8 @@ void loop() {
       if (isPaired) {
         rxPairState = RX_PAIRED;
         Serial.println(F("[PAIR] Pairing window expired (30s). Returning to PAIRED mode."));
-        /* Switch back to op_channel for data RX */
-        setChannel(opChannel);
+        /* Switch back to operational config (canal + SF) for data RX */
+        setRadioOp();
         radio.setDio1Action(rxDone);
         radio.startReceive(0xFFFF);
       } else {
@@ -2272,6 +2512,13 @@ void loop() {
       consecutiveCrcErrors = 0;
       rxSinceReset++;
       parseAndPrint(buffer, len, rssi, snr);
+
+      /* Uplink recu → la fenetre RX de cet emetteur est ouverte. Si une
+       * lecture d'attribut est en attente pour lui, c'est le moment. */
+      int slot = currentSlotForStats;
+      if (slot >= 0 && slot < MAX_PAIRED_EMITTERS && pendingPoll[slot].valid) {
+        sendPollAndWait(slot);
+      }
 
       if (snr < SNR_RESET_THRESHOLD) {
         doFullReset("SNR drift");
