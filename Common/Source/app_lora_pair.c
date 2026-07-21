@@ -625,7 +625,13 @@ PRIVATE void vSendPairRequest(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();  /* LED blink pendant le poll TX */
+        /* NE PAS appeler ZTIMER_vTask() ici : vSendPairRequest est appelee
+         * depuis le callback timer APP_cbTimerLoraPair, donc ce serait une
+         * REENTRANCE du dispatcher ZTIMER. Le ZTIMER_vTask du SDK JN518x
+         * reutilise u32Ticks comme delta ET timestamp : en reentrance il lit
+         * le delta comme un timestamp -> expire TOUS les timers d'un coup et
+         * declenche leurs callbacks en cascade (radio reconfiguree en plein
+         * TX, pile timers corrompue) -> blocage. On poll juste DIO1. */
     }
 
     /* Clear IRQ */
@@ -669,7 +675,7 @@ PRIVATE bool_t bListenForPairResponse(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();  /* LED blink pendant le poll RX */
+        /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
     }
 
     if (!bDio1)
@@ -836,7 +842,7 @@ PRIVATE void vSendPairConfirm(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();
+        /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
         /* Periodic status check */
         if ((u32Start % u32StatusCheckPeriod) == 0 && u32Start > 0)
         {
