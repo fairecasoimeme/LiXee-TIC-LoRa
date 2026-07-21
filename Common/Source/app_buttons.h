@@ -117,6 +117,10 @@ PUBLIC void APP_cbTimerButtonScan(void *pvParam);
 PUBLIC void APP_cbTimerButtonDelay(void *pvParam);
 PUBLIC uint32 APP_u32GetSwitchIOState(void);
 
+/* Flag appui long (demande d'appairage) — chemin de secours hors file.
+ * Mis a 1 par le scan bouton, remis a 0 par la boucle principale. */
+extern volatile uint8 g_u8LoraPairButtonRequest;
+
 /****************************************************************************/
 /***        External Variables                                            ***/
 /****************************************************************************/

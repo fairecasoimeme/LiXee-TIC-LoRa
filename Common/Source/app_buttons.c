@@ -74,6 +74,11 @@ void ntag_callback(ntag_field_detect_t fd, void *userData);
 
 uint32 u32TimeButton;
 
+/* Flag "appui long detecte" (demande d'appairage), consomme dans la boucle
+ * principale. Chemin de secours independant de la file APP_msgAppEvents, qui
+ * peut deborder. */
+volatile uint8 g_u8LoraPairButtonRequest = 0;
+
 /****************************************************************************/
 /***        Exported Variables                                            ***/
 /****************************************************************************/
@@ -396,6 +401,13 @@ PUBLIC void APP_cbTimerButtonScan(void *pvParam)
 				sButtonEvent.eType = APP_E_EVENT_BUTTON_UP;
 			}else{
 				sButtonEvent.eType = APP_E_EVENT_LEAVE_AND_RESET;
+				/* Appui long = demande d'appairage. On la signale AUSSI par un
+				 * flag direct, hors file : APP_msgAppEvents peut etre pleine
+				 * (bruit sur PIO0 pendant une TX data bloquante ou l'ancien
+				 * u8TimerLinky), et alors l'event serait jete et l'appairage
+				 * ne se declencherait jamais avant un power-cycle. Le flag est
+				 * consomme dans la boucle principale, independamment de la file. */
+				g_u8LoraPairButtonRequest = 1;
 			}
 			sButtonEvent.uEvent.sButton.u8Button = i;
 
