@@ -220,16 +220,27 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
         u8LedBlinkCount = 0;
         sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
 
-        /* Pas de reset radio ici : c'est vSendPairRequest (au premier tick du
-         * timer d'appairage) qui fait la reconfig COMPLETE sur le rendez-vous.
+        /* Power-cycle du TCXO (PIO14) avant l'appairage.
          *
-         * NE PAS ajouter de reset materiel ici : cela ferait DEUX HW resets
-         * rapproches (~300 ms) — celui-ci + celui de vSendPairRequest — et le
-         * second TX ne se terminait pas (PAIR_REQUEST TX timeout, DIO1 jamais
-         * leve). Le chemin boot qui fonctionne ne fait qu'une seule reconfig.
-         * On se contente donc de pointer la frequence sur le canal
-         * d'appairage ; le reste est repris par vSendPairRequest. */
-        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
+         * Symptome : le PAIR_REQUEST TX echouait par intermittence (DIO1 jamais
+         * leve = SetTx sans effet), et seul un debranchement recuperait — pas
+         * un HW reset. C'est la signature d'un TCXO/XOSC bloque : le HW reset
+         * (broche RESET) garde le TCXO alimente, donc ne le relance pas ; seul
+         * un power-cycle le fait. Comme TCXOEN est sur PIO14 (et non cable au
+         * 3.3V sur ce proto), on reproduit le power-cycle par logiciel :
+         * TCXOEN LOW -> attente -> TCXOEN HIGH -> attente de demarrage.
+         *
+         * On NE fait PAS de HW reset ici (broche RESET) : cela ferait deux
+         * resets rapproches avec celui de vSendPairRequest et cassait le TX.
+         * vSendPairRequest fera le HW reset + reconfig complete apres, une fois
+         * le TCXO redemarre. */
+        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, SX1280_TCXOEN_PIN, 0);
+        for (volatile uint32 i = 0; i < 24000; i++);   /* ~2ms TCXOEN bas */
+        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, SX1280_TCXOEN_PIN, 1);
+        for (volatile uint32 i = 0; i < 120000; i++);  /* ~10ms demarrage TCXO 52MHz */
+
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: TCXO power-cycled (PIO%d)\r\n",
+                    SX1280_TCXOEN_PIN);
 
         /* LED fast blink (150ms) for pairing mode */
         vStartBlinkTimer(150);
