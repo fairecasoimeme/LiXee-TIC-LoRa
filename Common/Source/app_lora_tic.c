@@ -439,7 +439,8 @@ PRIVATE uint8 u8ComputeTariffCode(void)
  *
  *   [0]     0x11 (version 1, type essential)
  *   [1]     sequence
- *   [2-3]   SINSTS total (VA, uint16 BE) — = PAPP en Historique
+ *   [2-3]   SINSTS total (VA, uint16 BE) — = PAPP en Historique (fallback
+ *           sur u16ApparentPower car u32TotalApparentPower=0 en Historique)
  *   [4-5]   SINSTS1 (VA, uint16 BE) — = SINSTS/PAPP en mono
  *   [6-7]   SINSTS2 (VA, uint16 BE) — 0 en mono
  *   [8-9]   SINSTS3 (VA, uint16 BE) — 0 en mono
@@ -455,9 +456,16 @@ PRIVATE void vBuildEssentialPacket(uint8 *pu8Buffer)
     pu8Buffer[1] = u8TxSequence++;
 
     /* SINSTS total (u32 -> uint16, cap 65535)
-     * En mono : = SINSTS = PAPP
-     * En tri  : = SINSTS (somme des 3 phases) */
+     * En Standard mono : = SINSTS = PAPP
+     * En Standard tri  : = SINSTS (somme des 3 phases)
+     * En Historique    : u32TotalApparentPower n'est PAS renseigne
+     *                    (PAPP va dans u16ApparentPower) -> on retombe
+     *                    dessus pour que le champ total porte bien PAPP. */
     uint32 u32Sinsts = sBaseDevice.sElectricalMeasurement.u32TotalApparentPower;
+    if (u32Sinsts == 0)
+    {
+        u32Sinsts = sBaseDevice.sElectricalMeasurement.u16ApparentPower;
+    }
     uint16 u16Sinsts = (u32Sinsts > 65535) ? 65535 : (uint16)u32Sinsts;
     pu8Buffer[2] = (uint8)(u16Sinsts >> 8);
     pu8Buffer[3] = (uint8)(u16Sinsts & 0xFF);
