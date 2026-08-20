@@ -118,6 +118,7 @@ PRIVATE uint8 u8BuildExtTariffLabel(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtMeterSerial(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtMeterDate(uint8 *pu8Buffer);
 PRIVATE uint8 u8BuildExtTariffOption(uint8 *pu8Buffer);
+PRIVATE uint8 u8BuildExtHistoAlerts(uint8 *pu8Buffer);
 PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
@@ -533,6 +534,7 @@ PRIVATE uint8 u8BuildExtendedPacket(uint8 *pu8Buffer, uint8 u8SubType)
         case LORA_TIC_EXT_METER_SERIAL:    return u8BuildExtMeterSerial(pu8Buffer);
         case LORA_TIC_EXT_METER_DATE:      return u8BuildExtMeterDate(pu8Buffer);
         case LORA_TIC_EXT_TARIFF_OPTION:   return u8BuildExtTariffOption(pu8Buffer);
+        case LORA_TIC_EXT_HISTO_ALERTS:    return u8BuildExtHistoAlerts(pu8Buffer);
         default:                           return u8BuildExtCurrentVoltage(pu8Buffer);
     }
 }
@@ -1219,6 +1221,57 @@ PRIVATE uint8 u8BuildExtTariffOption(uint8 *pu8Buffer)
     pu8Buffer[15] = (uint8)(((uint16)i16Val) & 0xFF);
 
     return 16;
+}
+
+/****************************************************************************
+ *
+ * NAME: u8BuildExtHistoAlerts
+ *
+ * DESCRIPTION:
+ * Sub-type 0x0B HISTO_ALERTS (12 octets) :
+ * Alertes et preavis specifiques au mode Historique.
+ *
+ *   [0]     0x12 (v1, extended)
+ *   [1]     sequence
+ *   [2]     0x0B (sub_type)
+ *   [3]     mode (au8LinkyMode) — champs pertinents en Historique uniquement
+ *   [4]     PEJP (uint8) — preavis EJP : minutes avant debut periode EJP
+ *   [5]     PPOT (uint8) — presence des potentiels (triphase)
+ *   [6-7]   ADIR1 (VA, uint16 BE) — avert. depassement puissance phase 1
+ *   [8-9]   ADIR2 (VA, uint16 BE) — avert. depassement puissance phase 2
+ *   [10-11] ADIR3 (VA, uint16 BE) — avert. depassement puissance phase 3
+ *
+ * En Standard ces etiquettes n'existent pas : le recepteur peut ignorer
+ * le paquet si [3] indique le mode Standard.
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8BuildExtHistoAlerts(uint8 *pu8Buffer)
+{
+    pu8Buffer[0] = (LORA_TIC_PROTOCOL_VERSION << 4) | LORA_TIC_PKT_DATA_EXTENDED;
+    pu8Buffer[1] = u8TxSequence++;
+    pu8Buffer[2] = LORA_TIC_EXT_HISTO_ALERTS;
+    pu8Buffer[3] = sBaseDevice.sLinkyServerCluster.au8LinkyMode;
+
+    /* PEJP — preavis EJP (1 octet) */
+    pu8Buffer[4] = sBaseDevice.sLinkyServerCluster.au8LinkyPEJP;
+
+    /* PPOT — presence des potentiels (1 octet) */
+    pu8Buffer[5] = sBaseDevice.sLinkyServerCluster.au8LinkyPPOT;
+
+    /* ADIR1/2/3 — depassement puissance par phase (uint16 BE) */
+    uint16 u16Val = sBaseDevice.sLinkyServerCluster.au16LinkyADIR1;
+    pu8Buffer[6] = (uint8)(u16Val >> 8);
+    pu8Buffer[7] = (uint8)(u16Val & 0xFF);
+
+    u16Val = sBaseDevice.sLinkyServerCluster.au16LinkyADIR2;
+    pu8Buffer[8] = (uint8)(u16Val >> 8);
+    pu8Buffer[9] = (uint8)(u16Val & 0xFF);
+
+    u16Val = sBaseDevice.sLinkyServerCluster.au16LinkyADIR3;
+    pu8Buffer[10] = (uint8)(u16Val >> 8);
+    pu8Buffer[11] = (uint8)(u16Val & 0xFF);
+
+    return 12;
 }
 
 /****************************************************************************

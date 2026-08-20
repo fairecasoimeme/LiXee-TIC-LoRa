@@ -226,9 +226,9 @@ le device connaît bien la clé → appairage validé.
 |---|---|
 | DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, négociée à l'appairage) |
 | DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
-| Cycle complet des 11 sous-types EXTENDED | **~220 s** (~3 min 40) |
+| Cycle complet des 12 sous-types EXTENDED | **~240 s** (~4 min) |
 
-Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0A → 0x00 …
+Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0B → 0x00 …
 
 Un EXTENDED est envoyé **juste après** l'ESSENTIAL correspondant (piggyback),
 en deux trames radio distinctes.
@@ -310,7 +310,7 @@ Valeurs observées :
 |---|---|---|
 | 0 | 1 | `0x12` |
 | 1 | 1 | seq |
-| 2 | 1 | **sub_type** (0x00..0x06) |
+| 2 | 1 | **sub_type** (0x00..0x0B) |
 
 ### 7.1 Sub-type `0x00` — CURRENT_VOLTAGE (15 octets)
 
@@ -620,6 +620,28 @@ type
 
 ---
 
+### 7.12 Sub-type `0x0B` — HISTO_ALERTS (12 octets)
+
+Alertes et préavis **spécifiques au mode Historique** (préavis EJP,
+dépassements de puissance par phase en triphasé). En Standard ces étiquettes
+n'existent pas : si `mode` (offset 3) indique le Standard, le récepteur peut
+ignorer le paquet.
+
+| Offset | Taille | Champ | Signification |
+|---|---|---|---|
+| 3 | 1 | mode Linky (même encodage que §6.1) | |
+| 4 | 1 | `PEJP` (uint8) | Préavis EJP : minutes avant le début de la période EJP |
+| 5 | 1 | `PPOT` (uint8) | Présence des potentiels (triphasé) |
+| 6-7 | 2 | `ADIR1` (uint16 BE, VA) | Avertissement dépassement puissance phase 1 |
+| 8-9 | 2 | `ADIR2` (uint16 BE, VA) | Avertissement dépassement puissance phase 2 |
+| 10-11 | 2 | `ADIR3` (uint16 BE, VA) | Avertissement dépassement puissance phase 3 |
+
+> `PPOT` et `ADIR1/2/3` ne sont émis par le compteur qu'en **triphasé** ; en
+> monophasé Historique ils valent 0. `PEJP` n'a de sens que pour un abonné
+> **option EJP**.
+
+---
+
 ## 8. Lecture d'attribut à la demande (bidirectionnel)
 
 Le canal descendant sert **uniquement à interroger un attribut** — modèle ZCL
@@ -802,7 +824,9 @@ encore envoyées** en LoRa :
 `PJOURF+1`, `PPOINTE`, `SMAXIN-1`, `SMAXSN-1`, `SMAXSN1-1`..`SMAXSN3-1`,
 `CCAIN-1`, `VTIC`, `NGTF`, `MSG1`, `MSG2`, `PRM`
 
-**Historique** : `PEJP`, `HHPHC`, `PPOT`, `ADIR1`..`ADIR3`, `PMAX`, `MOTDETAT`
+**Historique** : `HHPHC`, `MOTDETAT`
+*(`PAPP` et `PMAX` désormais transmis — ESSENTIAL / POWER_MAX_CFG ;
+`PEJP`, `PPOT`, `ADIR1`..`ADIR3` transmis via HISTO_ALERTS §7.12)*
 
 ---
 
