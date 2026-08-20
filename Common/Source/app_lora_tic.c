@@ -801,6 +801,13 @@ PRIVATE uint8 u8BuildExtPowerMaxCfg(uint8 *pu8Buffer)
     uint16 u16Val;
     {
         int32 i32Smaxsn = sBaseDevice.sElectricalMeasurement.i32TotalActivePower;
+        if (i32Smaxsn == 0)
+        {
+            /* Mode Historique : pas d'etiquette SMAXSN ; la puissance max
+             * du jour arrive via PMAX, range dans i16ActivePowerMax.
+             * On retombe dessus pour que le slot [3-4] porte bien PMAX. */
+            i32Smaxsn = sBaseDevice.sElectricalMeasurement.i16ActivePowerMax;
+        }
         if (i32Smaxsn < 0)          i32Smaxsn = 0;
         if (i32Smaxsn > 65535)      i32Smaxsn = 65535;
         u16Val = (uint16)i32Smaxsn;
