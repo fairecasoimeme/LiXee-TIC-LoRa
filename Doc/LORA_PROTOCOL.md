@@ -12,7 +12,7 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | Paramètre | Valeur |
 |---|---|
 | Chip | SX1280 / SX1281 (LoRa 2.4 GHz) |
-| Spreading Factor | **SF11** |
+| Spreading Factor | **negocie a l'appairage** (7..12) — assigner **SF10**, cf. §4.2 |
 | Bandwidth | **BW 406 kHz** |
 | Coding Rate | **4/5** |
 | Preamble | 16 symboles (encodé `0x18`) |
@@ -195,6 +195,21 @@ type
 
 Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3). Si
 `op_SF` est hors plage, il retombe sur **SF11**.
+
+> ⚠️ **Le récepteur devrait assigner `op_SF = 10`, pas 11.** Le repli firmware
+> est SF11, mais c'est le récepteur qui décide — et SF11 ne passe pas partout. Le budget
+> d'alimentation de la prise TIC limite la **charge** tirée par émission
+> (courant × airtime), pas le courant instantané. Mesures terrain, à pic de
+> courant identique (45 mA) :
+>
+> | Config | Charge par trame | Résultat |
+> |---|---|---|
+> | SF11 / +10 dBm | 11,1 mA·s | ❌ échoue sur certains compteurs |
+> | SF10 / +10 dBm | 5,6 mA·s | ✅ |
+>
+> SF10 à pleine puissance est préférable à SF11 à puissance réduite : moins
+> de charge **et** meilleure portée (−2,5 dB de sensibilité contre −10 dB de
+> puissance).
 
 > **Rétrocompat** : un récepteur qui envoie encore l'ancien format **20 octets**
 > (sans `op_SF`) est accepté ; l'émetteur applique SF11 par défaut. Un ZLinky
