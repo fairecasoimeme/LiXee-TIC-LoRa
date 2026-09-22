@@ -90,24 +90,30 @@
 
 /* Puissance d'emission pendant l'appairage uniquement (dBm).
  *
- * Plus basse que les donnees (+10 dBm) pour reduire le PIC de courant du
- * PA : ~27 mA a 0 dBm contre ~45 mA a +10 dBm.
+ * ATTENTION : l'appairage se fait TOUJOURS a SF11 (rendez-vous fixe,
+ * cf. LORA_PAIR_SF), meme si les donnees tournent en SF10. Il ne
+ * beneficie donc pas de la reduction de charge apportee par le SF.
  *
- * Constate sur le terrain : sur un Linky triphase, TX_DONE ne se leve
- * JAMAIS pendant l'appairage ("PAIR_REQUEST TX timeout" a chaque essai),
- * alors qu'il se leve systematiquement sur un monophase place au MEME
- * endroit, a la MEME distance du recepteur. Or TX_DONE est un evenement
- * interne au SX1280 : il ne depend ni de la distance, ni du recepteur,
- * ni de la propagation. La seule variable restante est donc l'energie
- * fournie par la prise TIC.
+ * Charge tiree par PAIR_REQUEST (24 o, SF11/BW406) :
+ *   +10 dBm : 45 mA x 247 ms = 11,1 mA.s
+ *     0 dBm : 27 mA x 247 ms =  6,7 mA.s
  *
- * Espacer les PAIR_REQUEST (300 -> 2500 ms) n'a rien change : ce n'est
- * pas le rapport cyclique moyen mais le pic instantane qui compte.
+ * Historique : sur un Linky triphase, l'appairage a +10 dBm echouait
+ * systematiquement ("PAIR_REQUEST TX timeout" a chaque essai, TX_DONE
+ * jamais leve) alors qu'il passait sur un monophase place au MEME
+ * endroit, a la MEME distance du recepteur. Passer a 0 dBm l'a debloque
+ * -- le budget d'alimentation TIC limite la CHARGE par emission.
  *
- * L'appairage est une operation de mise en service, faite a proximite du
- * recepteur : la portee n'y est pas critique. Mesure en monophase lors
- * d'un appairage reussi : RSSI = -53 dBm, soit une marge enorme. */
-#define LORA_PAIR_TX_POWER_DBM         0
+ * On reste neanmoins a +10 dBm : le Linky n'est pas mobile, l'appairage
+ * se fait donc a la DISTANCE OPERATIONNELLE reelle et a besoin de toute
+ * la portee. Baisser la puissance ici reviendrait a n'autoriser
+ * l'appairage que des installations proches -- inacceptable.
+ *
+ * La bonne facon de reduire la charge sans sacrifier la portee est de
+ * baisser le SF du rendez-vous (SF10 : 5,6 mA.s a pleine puissance),
+ * mais cela suppose de changer LORA_PAIR_SF des DEUX cotes, emetteur
+ * et recepteur, puisque le rendez-vous doit etre connu a l'avance. */
+#define LORA_PAIR_TX_POWER_DBM         10
 
 /* LED patterns */
 #define LORA_LED_UNPAIRED_PERIOD_MS    200   /* Fast blink 5Hz */
