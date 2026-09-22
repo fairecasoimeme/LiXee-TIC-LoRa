@@ -225,13 +225,19 @@ le device connaît bien la clé → appairage validé.
 | Élément | Période |
 |---|---|
 | DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, négociée à l'appairage) |
-| DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
+| DATA_EXTENDED | **1 tous les 4 ESSENTIAL**, émis dans son **propre cycle** intercalé à mi-intervalle (≈ +2,5 s après l'ESSENTIAL) |
 | Cycle complet des 12 sous-types EXTENDED | **~240 s** (~4 min) |
 
 Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0B → 0x00 …
 
-Un EXTENDED est envoyé **juste après** l'ESSENTIAL correspondant (piggyback),
-en deux trames radio distinctes.
+Un EXTENDED n'est **pas** envoyé juste après l'ESSENTIAL : il dispose de son
+propre cycle, décalé d'un **demi-intervalle**. Le récepteur ne doit donc pas
+s'attendre à voir les deux trames arriver coup sur coup.
+
+> **Pourquoi** : deux émissions à ~45 mA séparées de ~600 ms vidaient le
+> supercap de l'émetteur (la TIC plafonne à 130 mW). Le SX1280 partait bien
+> en TX puis redémarrait en cours d'émission — trame perdue, avec `IRQ` et
+> `DevErr` remis à zéro. L'espacement supprime la rafale.
 
 ### Période réelle
 

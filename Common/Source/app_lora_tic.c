@@ -100,6 +100,10 @@ PRIVATE uint8 au8TxPayload[LORA_TIC_MAX_PAYLOAD + LORA_CRYPT_MIC_SIZE];
 PRIVATE uint8 u8EssentialCounter = 0;
 PRIVATE uint8 u8ExtSubType = 0;
 
+/* TRUE quand le prochain cycle doit emettre un EXTENDED seul (cycle
+ * dedie, intercale a mi-intervalle entre deux ESSENTIAL). */
+PRIVATE bool_t bExtPending = FALSE;
+
 /****************************************************************************/
 /***        Exported Variables                                            ***/
 /****************************************************************************/
@@ -208,13 +212,20 @@ PUBLIC void APP_vLoRaTicPollTx(void)
  * NAME: APP_vLoRaTicSendPacket
  *
  * DESCRIPTION:
- * Cycle de transmission LoRa TIC :
- * 1) Toujours envoyer un ESSENTIAL (17B) — SINSTS + STGE/ADPS
- * 2) Toutes les LORA_TIC_EXTENDED_INTERVAL TX, envoyer aussi un
- *    EXTENDED (15-19B) en piggyback juste apres.
+ * Cycle de transmission LoRa TIC. Chaque cycle n'emet QU'UNE trame :
+ * 1) Cycle ESSENTIAL (17B, SINSTS + STGE/ADPS) : acquisition TIC puis TX,
+ *    replanifie a l'intervalle nominal.
+ * 2) Toutes les LORA_TIC_EXTENDED_INTERVAL ESSENTIAL, un cycle EXTENDED
+ *    (15-19B) est intercale a mi-intervalle : TX seul, sans acquisition
+ *    TIC (donnees du cycle precedent).
  *
- * Ainsi SINSTS est disponible chaque seconde (jamais rate),
- * et toutes les autres etiquettes TIC sont remontees en ~60s.
+ * Les deux trames ne sont volontairement PAS emises dos a dos : deux TX
+ * a ~45 mA separes de ~600 ms vidaient le supercap (budget TIC 130 mW)
+ * et la seconde s'effondrait en cours d'emission (le SX1280 partait en
+ * TX puis redemarrait : IRQ et DevErr remis a zero).
+ *
+ * La cadence ESSENTIAL est preservee : le cycle EXTENDED consomme deux
+ * demi-intervalles, donc on retombe sur la grille nominale.
  *
  ****************************************************************************/
 PUBLIC void APP_vLoRaTicSendPacket(void)
@@ -241,6 +252,66 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
      * pour eviter l'accumulation d'events dans la queue
      * (vAPP_LinkySensorSample est bloquante ~1-2s) */
     ZTIMER_eStop(u8TimerLoRa);
+
+    /* Intervalle nominal entre deux ESSENTIAL, et demi-intervalle utilise
+     * pour intercaler le cycle EXTENDED. */
+    uint32 u32IntervalMs = (uint32)APP_u8LoraPairGetTxIntervalSec() * 1000UL;
+    if (u32IntervalMs < 2000UL) u32IntervalMs = 2000UL;
+    uint32 u32HalfMs = u32IntervalMs / 2UL;
+    uint32 u32NextDelayMs;
+
+    /* ================= Cycle dedie EXTENDED =================
+     * L'EXTENDED n'est plus emis dos a dos avec l'ESSENTIAL : il a son
+     * propre cycle, un demi-intervalle plus tard. Deux emissions a
+     * ~45 mA separees de ~600 ms vidaient le supercap (budget TIC
+     * limite a 130 mW) et le second TX s'effondrait en cours d'emission.
+     *
+     * On ne refait PAS l'acquisition TIC ici : les donnees datent du
+     * cycle ESSENTIAL precedent (~un demi-intervalle), et surtout c'est
+     * elle qui vide le condensateur juste avant d'emettre. */
+    if (bExtPending)
+    {
+        bExtPending = FALSE;
+
+        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
+
+        u8ExtLen = APP_u8LoraCryptEncrypt(au8TxPayload, u8ExtLen,
+                                           APP_pu8LoraPairGetKey(),
+                                           APP_pu8LoraPairGetMAC(),
+                                           au8TxPayload[1]);
+
+        {
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s] TX [%d]: ",
+                        u8ExtSubType,
+                        (u8ExtLen > LORA_TIC_DATA_EXTENDED_MAX_SIZE) ? "+ENC" : "",
+                        u8ExtLen);
+            int i;
+            for (i = 0; i < u8ExtLen; i++)
+                DBG_vPrintf(TRACE_LORA_TIC, "%02X ", au8TxPayload[i]);
+            DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
+        }
+
+        if (bTransmitWithRetry(au8TxPayload, u8ExtLen))
+        {
+            u32TxCount++;
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX #%lu OK (sub=%d seq=%u)\r\n",
+                        u32TxCount, u8ExtSubType, u8TxSequence - 1);
+        }
+        else
+        {
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX FAILED (sub=%d seq=%u)\r\n",
+                        u8ExtSubType, u8TxSequence - 1);
+        }
+
+        u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
+
+        /* Deuxieme demi-intervalle : on retombe sur la grille ESSENTIAL. */
+        u32NextDelayMs = u32HalfMs;
+
+        APP_vLoraCmdRxWindow();
+        ZTIMER_eStart(u8TimerLoRa, ZTIMER_TIME_MSEC(u32NextDelayMs));
+        return;
+    }
 
     /* Acquisition TIC — met a jour sBaseDevice avec les dernieres
      * donnees Linky disponibles sur l'UART */
@@ -292,47 +363,22 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
                     u8TxSequence - 1, u32ConsecutiveFailures);
     }
 
-    /* ===== 2) Toutes les N TX, piggyback EXTENDED ===== */
+    /* ===== 2) Toutes les N ESSENTIAL, programmer un cycle EXTENDED =====
+     * L'EXTENDED n'est pas emis ici mais dans son propre cycle, un demi
+     * intervalle plus tard, pour laisser le supercap se recharger. */
     u8EssentialCounter++;
     if (u8EssentialCounter >= LORA_TIC_EXTENDED_INTERVAL)
     {
         u8EssentialCounter = 0;
-
-        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
-
-        /* Encrypt if paired */
-        u8ExtLen = APP_u8LoraCryptEncrypt(au8TxPayload, u8ExtLen,
-                                           APP_pu8LoraPairGetKey(),
-                                           APP_pu8LoraPairGetMAC(),
-                                           au8TxPayload[1]);
-
-        /* Hex dump */
-        {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s] TX [%d]: ",
-                        u8ExtSubType,
-                        (u8ExtLen > LORA_TIC_DATA_EXTENDED_MAX_SIZE) ? "+ENC" : "",
-                        u8ExtLen);
-            int i;
-            for (i = 0; i < u8ExtLen; i++)
-                DBG_vPrintf(TRACE_LORA_TIC, "%02X ", au8TxPayload[i]);
-            DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
-        }
-
-        bool_t bExtOk = bTransmitWithRetry(au8TxPayload, u8ExtLen);
-
-        if (bExtOk)
-        {
-            u32TxCount++;
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX #%lu OK (sub=%d seq=%u)\r\n",
-                        u32TxCount, u8ExtSubType, u8TxSequence - 1);
-        }
-        else
-        {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX FAILED (sub=%d seq=%u)\r\n",
-                        u8ExtSubType, u8TxSequence - 1);
-        }
-
-        u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
+        bExtPending = TRUE;
+        u32NextDelayMs = u32HalfMs;
+        DBG_vPrintf(TRACE_LORA_TIC,
+                    "LORA_TIC: EXT sub=%d programme dans %lu ms\r\n",
+                    u8ExtSubType, u32NextDelayMs);
+    }
+    else
+    {
+        u32NextDelayMs = u32IntervalMs;
     }
 
     /* LED geree par app_blink_led — pas de toggle TX */
@@ -347,10 +393,8 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 
     /* Relancer le timer LoRa pour le prochain cycle
      * (intervalle = temps entre la FIN d'un TX et le DEBUT du suivant).
-     * L'intervalle est pilotable par downlink, d'ou la relecture a chaque
-     * cycle plutot qu'une constante. */
-    ZTIMER_eStart(u8TimerLoRa,
-                  ZTIMER_TIME_MSEC(APP_u8LoraPairGetTxIntervalSec() * 1000UL));
+     * Vaut un demi-intervalle quand un cycle EXTENDED est intercale. */
+    ZTIMER_eStart(u8TimerLoRa, ZTIMER_TIME_MSEC(u32NextDelayMs));
 }
 
 /****************************************************************************
