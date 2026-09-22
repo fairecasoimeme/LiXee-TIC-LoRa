@@ -44,7 +44,24 @@
 /* Rendez-vous d'appairage : FIXE, independant de la config operationnelle.
  * Un ZLinky qui tourne en SF7/canal7 doit pouvoir revenir ici pour renegocier.
  * Le canal est LORA_PAIR_CHANNEL (defini dans app_lora_channels.h). */
-#define LORA_PAIR_SF                   11  /* SF du handshake (SX1280 SF11 = 0xB0) */
+/* SF du handshake d'appairage.
+ *
+ * ⚠️ DOIT etre identique cote recepteur : le rendez-vous doit etre connu
+ * a l'avance des deux cotes. Changer cette valeur sans changer le
+ * recepteur rend l'appairage totalement impossible.
+ *
+ * SF10 plutot que SF11 : le Linky n'est pas mobile, l'appairage se fait
+ * donc a la distance operationnelle reelle et doit rester a +10 dBm.
+ * Baisser le SF est le seul levier qui reduit la charge tiree SANS
+ * sacrifier la portee -- le budget d'alimentation de la prise TIC limite
+ * la CHARGE par emission (courant x airtime), pas le courant instantane.
+ *
+ *   PAIR_REQUEST SF11 / +10 dBm : 45 mA x 247 ms = 11,1 mA.s  -> echouait
+ *   PAIR_REQUEST SF10 / +10 dBm : 45 mA x 124 ms =  5,6 mA.s  -> OK
+ *
+ * Cout : -2,5 dB de sensibilite, contre -10 dB si on avait baisse la
+ * puissance a 0 dBm pour un gain de charge moindre (6,7 mA.s). */
+#define LORA_PAIR_SF                   10
 
 /* Extension PAIR_REQUEST (LiXee-Box >= v2.22) :
  *   Format 14+N octets, retro-compatible avec les receivers antérieurs
@@ -90,29 +107,17 @@
 
 /* Puissance d'emission pendant l'appairage uniquement (dBm).
  *
- * ATTENTION : l'appairage se fait TOUJOURS a SF11 (rendez-vous fixe,
- * cf. LORA_PAIR_SF), meme si les donnees tournent en SF10. Il ne
- * beneficie donc pas de la reduction de charge apportee par le SF.
+ * On reste a +10 dBm, comme les donnees : le Linky n'est pas mobile,
+ * l'appairage se fait donc a la DISTANCE OPERATIONNELLE reelle et a
+ * besoin de toute la portee. Baisser la puissance ici reviendrait a
+ * n'autoriser l'appairage que des installations proches.
  *
- * Charge tiree par PAIR_REQUEST (24 o, SF11/BW406) :
- *   +10 dBm : 45 mA x 247 ms = 11,1 mA.s
- *     0 dBm : 27 mA x 247 ms =  6,7 mA.s
+ * La charge tiree est maitrisee par le SF du rendez-vous (SF10, cf.
+ * LORA_PAIR_SF) et non par la puissance : 5,6 mA.s a pleine puissance,
+ * contre 11,1 mA.s a SF11 qui echouait sur certaines installations.
  *
- * Historique : sur un Linky triphase, l'appairage a +10 dBm echouait
- * systematiquement ("PAIR_REQUEST TX timeout" a chaque essai, TX_DONE
- * jamais leve) alors qu'il passait sur un monophase place au MEME
- * endroit, a la MEME distance du recepteur. Passer a 0 dBm l'a debloque
- * -- le budget d'alimentation TIC limite la CHARGE par emission.
- *
- * On reste neanmoins a +10 dBm : le Linky n'est pas mobile, l'appairage
- * se fait donc a la DISTANCE OPERATIONNELLE reelle et a besoin de toute
- * la portee. Baisser la puissance ici reviendrait a n'autoriser
- * l'appairage que des installations proches -- inacceptable.
- *
- * La bonne facon de reduire la charge sans sacrifier la portee est de
- * baisser le SF du rendez-vous (SF10 : 5,6 mA.s a pleine puissance),
- * mais cela suppose de changer LORA_PAIR_SF des DEUX cotes, emetteur
- * et recepteur, puisque le rendez-vous doit etre connu a l'avance. */
+ * Ce define reste un point de reglage si une installation resistait
+ * malgre le SF10. */
 #define LORA_PAIR_TX_POWER_DBM         10
 
 /* LED patterns */

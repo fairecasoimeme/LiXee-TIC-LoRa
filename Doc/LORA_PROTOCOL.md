@@ -30,7 +30,7 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | 0 | 2 410 MHz | bas de bande |
 | 1 | 2 420 MHz | |
 | 2 | 2 430 MHz | |
-| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés) |
+| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés, **SF10**) |
 | 4 | 2 450 MHz | |
 | 5 | 2 460 MHz | |
 | 6 | 2 470 MHz | |
@@ -121,11 +121,21 @@ PAIR_REQUEST, etc.
 
 ## 4. Appairage
 
-L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF11**, quelle que soit
+L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF10**, quelle que soit
 la configuration opérationnelle. C'est ce qui permet à un ZLinky qui tourne en
 SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre une
 fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
 300 ms et écoute 200 ms après chaque envoi.
+
+> ⚠️ **Le rendez-vous est passé de SF11 à SF10** — le récepteur doit écouter sa
+> fenêtre d'appairage en **SF10**, sinon plus aucun appairage n'est possible.
+>
+> Raison : le Linky n'est pas mobile, donc l'appairage se fait à la distance
+> opérationnelle réelle et doit rester à +10 dBm. Or à SF11/+10 dBm la charge
+> tirée (45 mA × 247 ms = 11,1 mA·s) dépassait le budget de la prise TIC sur
+> certaines installations, et l'émission n'aboutissait pas. SF10 la ramène à
+> 5,6 mA·s **sans toucher à la puissance**, pour seulement −2,5 dB de
+> sensibilité.
 
 **C'est l'appairage qui fixe le SF et le canal opérationnels.** Ce sont des
 paramètres **réseau**, communs à tous les ZLinky d'un même récepteur, pas des
@@ -133,7 +143,7 @@ réglages par appareil. Pour les changer, on **refait un appairage** (appui long
 
 ```
 device                                box
-  │         (rendez-vous : canal 3, SF11)
+  │         (rendez-vous : canal 3, SF10)
   │──── PAIR_REQUEST ────────────────▶│
   │                                    │  génère clé AES-128
   │                                    │  choisit op_channel + op_SF
