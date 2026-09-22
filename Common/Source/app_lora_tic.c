@@ -1589,8 +1589,15 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
      * Poll DIO1 GPIO uniquement. Timeout 500ms (airtime ~100-160ms).
      */
 
+    /* Timeout de poll TX.
+     * Etait a 500 ms, dimensionne quand le commentaire annoncait un
+     * airtime de "100-160 ms". A SF11 un TX reussi mesure 247-272 ms :
+     * si l'airtime doublait par intermittence (BW ou SF mal appliques),
+     * on tomberait pile sur la limite, ce qui expliquerait des echecs
+     * aleatoires a ~50 %. On elargit largement pour mesurer la verite :
+     * un TX_DONE qui arrive a 600 ms ou 900 ms se verra dans le @%lums. */
     bool_t bDio1Detected = FALSE;
-    uint32 u32WaitCycles = 500UL * u32CycPerMs;  /* 500ms max */
+    uint32 u32WaitCycles = 3000UL * u32CycPerMs;  /* 3 s max */
 
     while (DWT->CYCCNT < u32WaitCycles)
     {
