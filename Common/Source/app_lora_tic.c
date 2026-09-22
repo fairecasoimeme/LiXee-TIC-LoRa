@@ -29,6 +29,9 @@
 #include "ZQueue.h"
 #include "ZTimer.h"
 #include "fsl_gpio.h"
+#ifdef WATCHDOG_ALLOWED
+#include "fsl_wwdt.h"
+#endif
 
 #include "app_lora_tic.h"
 #include "app_main.h"
@@ -227,6 +230,13 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
      * donnees Linky disponibles sur l'UART */
     vAPP_LinkySensorSample();
 
+#ifdef WATCHDOG_ALLOWED
+    /* La boucle d'acquisition TIC sort par break des que la trame est
+     * complete, en sautant son WWDT_Refresh : on repart d'un compteur
+     * propre avant d'enchainer ~900 ms de TX/RX. */
+    WWDT_Refresh(WWDT);
+#endif
+
     /* LED geree par app_blink_led / App_Linky (1s erreur, 3s OK) — pas de toggle TX */
 
     /* ===== 1) Toujours envoyer ESSENTIAL (17B) ===== */
@@ -310,6 +320,10 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
     }
 
     /* LED geree par app_blink_led — pas de toggle TX */
+
+#ifdef WATCHDOG_ALLOWED
+    WWDT_Refresh(WWDT);
+#endif
 
     /* Fenetre de reception downlink : le recepteur vient de nous entendre,
      * c'est le moment ou il peut deposer une commande. Modele Class A. */
@@ -1505,6 +1519,14 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
         }
         /* Dispatch cooperative timers (LED blink etc.) pendant le poll TX */
         ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+        /* A SF11 l'airtime atteint ~250 ms par trame ; avec ESSENTIAL +
+         * EXTENDED + fenetre RX on frole les 900 ms alors que le watchdog
+         * est arme a 1 s avec reset. Cette boucle est bornee par le
+         * compteur DWT (500 ms), donc la nourrir ici ne masque aucun
+         * blocage reel : ca evite juste un reset sur un TX legitime. */
+        WWDT_Refresh(WWDT);
+#endif
     }
 
     uint32 u32ElapsedMs = DWT->CYCCNT / u32CycPerMs;

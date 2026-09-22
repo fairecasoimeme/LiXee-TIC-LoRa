@@ -31,6 +31,9 @@
 #include "sx1280.h"
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
+#ifdef WATCHDOG_ALLOWED
+#include "fsl_wwdt.h"
+#endif
 
 /****************************************************************************/
 /***        Macro Definitions                                             ***/
@@ -139,6 +142,11 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
             break;
         }
         ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+        /* Fenetre RX de 300 ms : bornee par le compteur DWT, donc la
+         * nourrir ici ne masque aucun blocage (cf. bTransmitAndWait). */
+        WWDT_Refresh(WWDT);
+#endif
     }
 
     if (!bDio1)
