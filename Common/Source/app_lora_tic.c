@@ -125,7 +125,15 @@ PRIVATE uint8 u8BuildExtHistoAlerts(uint8 *pu8Buffer);
 PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
+PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len);
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
+
+/* Nombre de reemissions sur echec (0 = pas de retry).
+ * Un echec signifie que le SX1280 n'est jamais parti en TX : la trame
+ * n'est pas partie du tout, la reemettre ne cree donc pas de doublon.
+ * bTransmitAndWait refait un HW reset + reconfig complet a chaque essai,
+ * ce qui est precisement ce qui debloque la radio. */
+#define LORA_TIC_TX_MAX_RETRIES  1
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -260,7 +268,7 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
         DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
     }
 
-    bool_t bOk = bTransmitAndWait(au8TxPayload, u8EssTxLen);
+    bool_t bOk = bTransmitWithRetry(au8TxPayload, u8EssTxLen);
 
     if (bOk)
     {
@@ -302,7 +310,7 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
             DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
         }
 
-        bool_t bExtOk = bTransmitAndWait(au8TxPayload, u8ExtLen);
+        bool_t bExtOk = bTransmitWithRetry(au8TxPayload, u8ExtLen);
 
         if (bExtOk)
         {
@@ -1567,17 +1575,65 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
         return TRUE;
     }
 
-    /* Cas 2 : DIO1 pas vu mais mode STDBY — TX terminee naturellement */
-    if (u8Mode == 2 || u8Mode == 3)
+    /* Cas 2 : DIO1 pas vu, mais TX_DONE latche dans le registre IRQ —
+     * la trame est bien partie, seule la detection GPIO a ete ratee. */
+    if (u16Irq & SX1280_IRQ_TX_DONE)
     {
         SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
-        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX OK (STDBY, no DIO1) @%lums\r\n", u32ElapsedMs);
+        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX OK (IRQ TX_DONE, no DIO1) @%lums\r\n",
+                    u32ElapsedMs);
         return TRUE;
     }
 
-    /* Cas 3 : Vrai timeout — ni DIO1 ni retour en STDBY */
-    DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX TIMEOUT @%lums (mode=%d)\r\n",
-                u32ElapsedMs, u8Mode);
+    /* Cas 3 : echec.
+     * ATTENTION : ne PAS conclure au succes sur le seul mode STDBY_RC.
+     * Le SX1280 est en STDBY_RC aussi bien apres un TX reussi (retour
+     * automatique) que lorsqu'il n'est JAMAIS parti en TX (SetTx sans
+     * effet). Les deux cas sont indiscernables par le mode ; seul
+     * TX_DONE tranche. L'ancien code renvoyait TRUE sur mode==2/3, ce
+     * qui comptait comme emises des trames jamais transmises (IRQ=0x0000)
+     * et faisait chuter le PDR cote recepteur. */
+    SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
+    DBG_vPrintf(TRACE_LORA_TIC,
+                "LORA_TIC: TX FAILED @%lums (mode=%d IRQ=0x%04X) — trame non emise\r\n",
+                u32ElapsedMs, u8Mode, u16Irq);
+    return FALSE;
+}
+
+/****************************************************************************
+ *
+ * NAME: bTransmitWithRetry
+ *
+ * DESCRIPTION:
+ * Emet la trame et la reemet si le SX1280 n'est pas parti en TX.
+ * On reutilise le MEME buffer (donc le meme numero de sequence) : un
+ * echec signifie que rien n'a ete emis, la reemission ne cree pas de
+ * doublon cote recepteur.
+ *
+ ****************************************************************************/
+PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len)
+{
+    uint8 u8Try;
+
+    for (u8Try = 0; u8Try <= LORA_TIC_TX_MAX_RETRIES; u8Try++)
+    {
+        if (bTransmitAndWait(pu8Data, u8Len))
+        {
+            if (u8Try > 0)
+            {
+                DBG_vPrintf(TRACE_LORA_TIC,
+                            "LORA_TIC: TX rattrape au retry %d\r\n", u8Try);
+            }
+            return TRUE;
+        }
+
+        if (u8Try < LORA_TIC_TX_MAX_RETRIES)
+        {
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: retry TX (%d/%d)...\r\n",
+                        u8Try + 1, LORA_TIC_TX_MAX_RETRIES);
+        }
+    }
+
     return FALSE;
 }
 
