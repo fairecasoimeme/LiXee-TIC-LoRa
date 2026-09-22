@@ -230,8 +230,16 @@ le device connaît bien la clé → appairage validé.
 
 Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0B → 0x00 …
 
-Un EXTENDED est envoyé **juste après** l'ESSENTIAL correspondant (piggyback),
-en deux trames radio distinctes.
+Un EXTENDED est envoyé **après** l'ESSENTIAL correspondant (piggyback), en deux
+trames radio distinctes, séparées par un **intervalle d'environ 1 s**.
+
+> **Pourquoi cet intervalle** : sans lui, les deux trames s'enchaînent à
+> ~30-50 ms (le temps du reconfig radio côté émetteur). C'est trop court pour
+> un récepteur qui doit déchiffrer la première puis la publier en MQTT avant
+> l'arrivée du préambule de la seconde — il rate alors systématiquement
+> l'EXTENDED. Le récepteur doit malgré tout **ré-armer la réception
+> immédiatement** après chaque trame et déporter le traitement hors de la
+> boucle d'écoute : l'intervalle est une marge, pas une garantie.
 
 ### Période réelle
 

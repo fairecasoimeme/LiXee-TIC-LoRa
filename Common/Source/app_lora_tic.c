@@ -32,6 +32,8 @@
 #ifdef WATCHDOG_ALLOWED
 #include "fsl_wwdt.h"
 #endif
+/* Horloge ms (meme source que ZTIMER) pour l'espacement inter-trames */
+#include "fsl_os_abstraction.h"
 
 #include "app_lora_tic.h"
 #include "app_main.h"
@@ -125,6 +127,18 @@ PRIVATE uint8 u8BuildExtHistoAlerts(uint8 *pu8Buffer);
 PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
+PRIVATE void vWaitMs(uint32 u32Ms);
+
+/* Espacement entre l'ESSENTIAL et l'EXTENDED qui le suit (ms).
+ *
+ * Sans cette pause, les deux trames s'enchainent a ~30-50 ms d'intervalle
+ * (le temps du reconfig radio et du dump hex). C'est trop court pour un
+ * recepteur qui doit dechiffrer la premiere puis publier en MQTT avant
+ * que le preambule de la seconde n'arrive : il rate alors l'EXTENDED.
+ *
+ * L'espacement rallonge le cycle d'autant, sans changer la cadence des
+ * donnees essentielles ni le format des trames. */
+#define LORA_TIC_INTER_FRAME_GAP_MS  1000
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
 
 /****************************************************************************/
@@ -281,6 +295,11 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
     if (u8EssentialCounter >= LORA_TIC_EXTENDED_INTERVAL)
     {
         u8EssentialCounter = 0;
+
+        /* Laisser le recepteur traiter l'ESSENTIAL (dechiffrement +
+         * publication) avant d'envoyer l'EXTENDED. Cf.
+         * LORA_TIC_INTER_FRAME_GAP_MS. */
+        vWaitMs(LORA_TIC_INTER_FRAME_GAP_MS);
 
         uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
 
@@ -1481,6 +1500,30 @@ PUBLIC bool_t APP_bLoraTicTransmitRaw(uint8 *pu8Data, uint8 u8Len)
 {
     return bTransmitAndWait(pu8Data, u8Len);
 }
+
+/****************************************************************************
+ *
+ * NAME: vWaitMs
+ *
+ * DESCRIPTION:
+ * Attente active, ZTIMER et watchdog nourris pendant toute la duree.
+ * A n'appeler QUE depuis la boucle main : ZTIMER_vTask() ne doit jamais
+ * etre reentrant depuis un callback timer.
+ *
+ ****************************************************************************/
+PRIVATE void vWaitMs(uint32 u32Ms)
+{
+    uint32 u32StartMs = OSA_TimeGetMsec();
+
+    while ((uint32)(OSA_TimeGetMsec() - u32StartMs) < u32Ms)
+    {
+        ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+        WWDT_Refresh(WWDT);
+#endif
+    }
+}
+
 
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
 {
