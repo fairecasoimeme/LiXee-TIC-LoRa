@@ -44,6 +44,10 @@
 #include "sx1280_config.h"
 #include "app_lora_channels.h"
 
+/* Horloge ms (meme source que ZTIMER) pour animer la LED pendant les
+ * boucles de poll d'appairage sans reentrer dans ZTIMER_vTask(). */
+#include "fsl_os_abstraction.h"
+
 /* ZPS for IEEE MAC address */
 #include "zps_apl_zdo.h"
 
@@ -67,6 +71,9 @@
 
 /* DIO1 pour poll RX_DONE */
 #define LORA_DIO1_PIN       SX1280_DIO1_PIN
+
+/* Cadence de clignotement LED pendant les boucles de poll d'appairage (ms) */
+#define LORA_PAIR_POLL_LED_MS  150
 
 /* Protocol version */
 #define LORA_TIC_PROTOCOL_VERSION_PAIR  0x01
@@ -104,6 +111,36 @@ PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE void vSendPairConfirm(void);
 PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
+PRIVATE void vPollLedBlink(void);
+
+
+/****************************************************************************
+ *
+ * NAME: vPollLedBlink
+ *
+ * DESCRIPTION:
+ * Anime la LED (clignotement ~150 ms) pendant les boucles de poll DIO1
+ * de l'appairage. Ces boucles s'executent dans le callback timer
+ * APP_cbTimerLoraPair et bloquent ~450-550 ms par tick : on ne peut donc
+ * PAS appeler ZTIMER_vTask() (reentrance interdite, cf. vSendPairRequest),
+ * et laisser tourner les timers de blink ZTIMER donnerait une LED figee
+ * puis un flash instantane au rattrapage. On pilote donc la LED en direct,
+ * sur base de l'horloge ms, sans toucher a ZTIMER.
+ *
+ ****************************************************************************/
+PRIVATE void vPollLedBlink(void)
+{
+    static uint32 u32LastToggleMs = 0;
+    static bool_t bLedOn = TRUE;
+
+    uint32 u32NowMs = OSA_TimeGetMsec();
+    if ((uint32)(u32NowMs - u32LastToggleMs) >= LORA_PAIR_POLL_LED_MS)
+    {
+        u32LastToggleMs = u32NowMs;
+        bLedOn = !bLedOn;
+        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, LORA_LED_PIN, bLedOn ? 1 : 0);
+    }
+}
 
 
 /****************************************************************************/
@@ -631,7 +668,8 @@ PRIVATE void vSendPairRequest(void)
          * reutilise u32Ticks comme delta ET timestamp : en reentrance il lit
          * le delta comme un timestamp -> expire TOUS les timers d'un coup et
          * declenche leurs callbacks en cascade (radio reconfiguree en plein
-         * TX, pile timers corrompue) -> blocage. On poll juste DIO1. */
+         * TX, pile timers corrompue) -> blocage. On anime la LED en direct. */
+        vPollLedBlink();
     }
 
     /* Clear IRQ */
@@ -676,6 +714,7 @@ PRIVATE bool_t bListenForPairResponse(void)
             break;
         }
         /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
+        vPollLedBlink();
     }
 
     if (!bDio1)
@@ -843,6 +882,7 @@ PRIVATE void vSendPairConfirm(void)
             break;
         }
         /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
+        vPollLedBlink();
         /* Periodic status check */
         if ((u32Start % u32StatusCheckPeriod) == 0 && u32Start > 0)
         {
