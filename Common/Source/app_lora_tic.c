@@ -32,6 +32,8 @@
 #ifdef WATCHDOG_ALLOWED
 #include "fsl_wwdt.h"
 #endif
+/* Horloge ms (meme source que ZTIMER) pour le backoff de reemission */
+#include "fsl_os_abstraction.h"
 
 #include "app_lora_tic.h"
 #include "app_main.h"
@@ -128,12 +130,18 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
 PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len);
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
 
-/* Nombre de reemissions sur echec (0 = pas de retry).
- * Un echec signifie que le SX1280 n'est jamais parti en TX : la trame
- * n'est pas partie du tout, la reemettre ne cree donc pas de doublon.
- * bTransmitAndWait refait un HW reset + reconfig complet a chaque essai,
- * ce qui est precisement ce qui debloque la radio. */
+/* Nombre de reemissions sur echec (0 = pas de retry). */
 #define LORA_TIC_TX_MAX_RETRIES  1
+
+/* Temps de recharge avant une reemission (ms).
+ * Diagnostic terrain : sur un echec, modeAtTxStart=6 (le SX1280 part bien
+ * en TX) puis on le retrouve en STDBY_RC avec IRQ=0x0000 ET DevErr=0x0000.
+ * Un registre IRQ vide apres un TX engage = le chip a redemarre en cours
+ * d'emission : l'alimentation s'effondre sous les ~45 mA du PA (la TIC
+ * plafonne a 130 mW, l'energie vient du supercap).
+ * Sans attente, le retry repartait sur un condensateur encore vide et
+ * echouait a 100 %. On lui laisse le temps de se recharger. */
+#define LORA_TIC_TX_RETRY_BACKOFF_MS  1500
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -1639,8 +1647,26 @@ PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len)
 
         if (u8Try < LORA_TIC_TX_MAX_RETRIES)
         {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: retry TX (%d/%d)...\r\n",
-                        u8Try + 1, LORA_TIC_TX_MAX_RETRIES);
+            DBG_vPrintf(TRACE_LORA_TIC,
+                        "LORA_TIC: retry TX (%d/%d) apres %d ms de recharge...\r\n",
+                        u8Try + 1, LORA_TIC_TX_MAX_RETRIES,
+                        LORA_TIC_TX_RETRY_BACKOFF_MS);
+
+            /* Laisser le supercap se recharger avant de retenter : sans
+             * cette pause le retry repart sur une alim encore effondree. */
+            {
+                uint32 u32StartMs = OSA_TimeGetMsec();
+                while ((uint32)(OSA_TimeGetMsec() - u32StartMs)
+                                            < LORA_TIC_TX_RETRY_BACKOFF_MS)
+                {
+                    /* Contexte boucle main (pas un callback timer) :
+                     * ZTIMER_vTask() est donc sur ici. */
+                    ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+                    WWDT_Refresh(WWDT);
+#endif
+                }
+            }
         }
     }
 
