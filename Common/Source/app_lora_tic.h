@@ -36,10 +36,6 @@
  * +10 dBm = limite reglementaire ETSI EU (EN 300 440) pour la bande
  * 2.4 GHz ISM. Le SX1280 accepte jusqu'a +13 dBm mais ce serait hors
  * conformite pour une commercialisation en Europe. */
-/* +10 dBm : limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM.
- * NB : un test a 0 dBm (pic PA ~27 mA au lieu de ~45 mA) n'a PAS
- * supprime les echecs TX -- ils etaient meme plus frequents. La cause
- * de ces echecs n'est donc pas le courant consomme par le PA. */
 #define LORA_TIC_TX_POWER_DBM       10
 
 /* Version du protocole LoRa TIC */

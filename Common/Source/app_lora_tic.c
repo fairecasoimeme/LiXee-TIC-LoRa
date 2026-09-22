@@ -32,8 +32,6 @@
 #ifdef WATCHDOG_ALLOWED
 #include "fsl_wwdt.h"
 #endif
-/* Horloge ms (meme source que ZTIMER) pour le backoff de reemission */
-#include "fsl_os_abstraction.h"
 
 #include "app_lora_tic.h"
 #include "app_main.h"
@@ -100,10 +98,6 @@ PRIVATE uint8 au8TxPayload[LORA_TIC_MAX_PAYLOAD + LORA_CRYPT_MIC_SIZE];
 PRIVATE uint8 u8EssentialCounter = 0;
 PRIVATE uint8 u8ExtSubType = 0;
 
-/* TRUE quand le prochain cycle doit emettre un EXTENDED seul (cycle
- * dedie, intercale a mi-intervalle entre deux ESSENTIAL). */
-PRIVATE bool_t bExtPending = FALSE;
-
 /****************************************************************************/
 /***        Exported Variables                                            ***/
 /****************************************************************************/
@@ -131,33 +125,7 @@ PRIVATE uint8 u8BuildExtHistoAlerts(uint8 *pu8Buffer);
 PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
-PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len);
-PRIVATE void vWaitMs(uint32 u32Ms);
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
-
-/* Nombre de reemissions sur echec (0 = pas de retry). */
-#define LORA_TIC_TX_MAX_RETRIES  1
-
-/* Temps de recuperation entre l'acquisition TIC et le TX ESSENTIAL (ms).
- *
- * Observation terrain decisive : l'EXTENDED, emis dans son cycle dedie
- * SANS acquisition TIC prealable, passe (TX OK @247 ms) ; l'ESSENTIAL,
- * emis juste apres vAPP_LinkySensorSample(), echoue. Meme airtime
- * (28 symboles dans les deux cas), memes payloads a un octet pres.
- * Le facteur discriminant est donc l'acquisition TIC qui precede -- et
- * c'est exactement ce qui double de duree en triphase, d'ou un mode
- * mono sain et un triphase qui s'effondre. */
-#define LORA_TIC_POST_TIC_SETTLE_MS   1500
-
-/* Temps de recharge avant une reemission (ms).
- * Diagnostic terrain : sur un echec, modeAtTxStart=6 (le SX1280 part bien
- * en TX) puis on le retrouve en STDBY_RC avec IRQ=0x0000 ET DevErr=0x0000.
- * Un registre IRQ vide apres un TX engage = le chip a redemarre en cours
- * d'emission : l'alimentation s'effondre sous les ~45 mA du PA (la TIC
- * plafonne a 130 mW, l'energie vient du supercap).
- * Sans attente, le retry repartait sur un condensateur encore vide et
- * echouait a 100 %. On lui laisse le temps de se recharger. */
-#define LORA_TIC_TX_RETRY_BACKOFF_MS  1500
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -224,20 +192,13 @@ PUBLIC void APP_vLoRaTicPollTx(void)
  * NAME: APP_vLoRaTicSendPacket
  *
  * DESCRIPTION:
- * Cycle de transmission LoRa TIC. Chaque cycle n'emet QU'UNE trame :
- * 1) Cycle ESSENTIAL (17B, SINSTS + STGE/ADPS) : acquisition TIC puis TX,
- *    replanifie a l'intervalle nominal.
- * 2) Toutes les LORA_TIC_EXTENDED_INTERVAL ESSENTIAL, un cycle EXTENDED
- *    (15-19B) est intercale a mi-intervalle : TX seul, sans acquisition
- *    TIC (donnees du cycle precedent).
+ * Cycle de transmission LoRa TIC :
+ * 1) Toujours envoyer un ESSENTIAL (17B) — SINSTS + STGE/ADPS
+ * 2) Toutes les LORA_TIC_EXTENDED_INTERVAL TX, envoyer aussi un
+ *    EXTENDED (15-19B) en piggyback juste apres.
  *
- * Les deux trames ne sont volontairement PAS emises dos a dos : deux TX
- * a ~45 mA separes de ~600 ms vidaient le supercap (budget TIC 130 mW)
- * et la seconde s'effondrait en cours d'emission (le SX1280 partait en
- * TX puis redemarrait : IRQ et DevErr remis a zero).
- *
- * La cadence ESSENTIAL est preservee : le cycle EXTENDED consomme deux
- * demi-intervalles, donc on retombe sur la grille nominale.
+ * Ainsi SINSTS est disponible chaque seconde (jamais rate),
+ * et toutes les autres etiquettes TIC sont remontees en ~60s.
  *
  ****************************************************************************/
 PUBLIC void APP_vLoRaTicSendPacket(void)
@@ -265,66 +226,6 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
      * (vAPP_LinkySensorSample est bloquante ~1-2s) */
     ZTIMER_eStop(u8TimerLoRa);
 
-    /* Intervalle nominal entre deux ESSENTIAL, et demi-intervalle utilise
-     * pour intercaler le cycle EXTENDED. */
-    uint32 u32IntervalMs = (uint32)APP_u8LoraPairGetTxIntervalSec() * 1000UL;
-    if (u32IntervalMs < 2000UL) u32IntervalMs = 2000UL;
-    uint32 u32HalfMs = u32IntervalMs / 2UL;
-    uint32 u32NextDelayMs;
-
-    /* ================= Cycle dedie EXTENDED =================
-     * L'EXTENDED n'est plus emis dos a dos avec l'ESSENTIAL : il a son
-     * propre cycle, un demi-intervalle plus tard. Deux emissions a
-     * ~45 mA separees de ~600 ms vidaient le supercap (budget TIC
-     * limite a 130 mW) et le second TX s'effondrait en cours d'emission.
-     *
-     * On ne refait PAS l'acquisition TIC ici : les donnees datent du
-     * cycle ESSENTIAL precedent (~un demi-intervalle), et surtout c'est
-     * elle qui vide le condensateur juste avant d'emettre. */
-    if (bExtPending)
-    {
-        bExtPending = FALSE;
-
-        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
-
-        u8ExtLen = APP_u8LoraCryptEncrypt(au8TxPayload, u8ExtLen,
-                                           APP_pu8LoraPairGetKey(),
-                                           APP_pu8LoraPairGetMAC(),
-                                           au8TxPayload[1]);
-
-        {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s] TX [%d]: ",
-                        u8ExtSubType,
-                        (u8ExtLen > LORA_TIC_DATA_EXTENDED_MAX_SIZE) ? "+ENC" : "",
-                        u8ExtLen);
-            int i;
-            for (i = 0; i < u8ExtLen; i++)
-                DBG_vPrintf(TRACE_LORA_TIC, "%02X ", au8TxPayload[i]);
-            DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
-        }
-
-        if (bTransmitWithRetry(au8TxPayload, u8ExtLen))
-        {
-            u32TxCount++;
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX #%lu OK (sub=%d seq=%u)\r\n",
-                        u32TxCount, u8ExtSubType, u8TxSequence - 1);
-        }
-        else
-        {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX FAILED (sub=%d seq=%u)\r\n",
-                        u8ExtSubType, u8TxSequence - 1);
-        }
-
-        u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
-
-        /* Deuxieme demi-intervalle : on retombe sur la grille ESSENTIAL. */
-        u32NextDelayMs = u32HalfMs;
-
-        APP_vLoraCmdRxWindow();
-        ZTIMER_eStart(u8TimerLoRa, ZTIMER_TIME_MSEC(u32NextDelayMs));
-        return;
-    }
-
     /* Acquisition TIC — met a jour sBaseDevice avec les dernieres
      * donnees Linky disponibles sur l'UART */
     vAPP_LinkySensorSample();
@@ -332,15 +233,9 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 #ifdef WATCHDOG_ALLOWED
     /* La boucle d'acquisition TIC sort par break des que la trame est
      * complete, en sautant son WWDT_Refresh : on repart d'un compteur
-     * propre avant d'enchainer le TX. */
+     * propre avant d'enchainer ~900 ms de TX/RX. */
     WWDT_Refresh(WWDT);
 #endif
-
-    /* Fenetre de recuperation entre l'acquisition TIC et le TX.
-     * C'est l'acquisition qui precede le TX qui fait echouer l'ESSENTIAL
-     * (cf. LORA_TIC_POST_TIC_SETTLE_MS) : on laisse le temps a l'alim de
-     * remonter avant d'engager le PA. */
-    vWaitMs(LORA_TIC_POST_TIC_SETTLE_MS);
 
     /* LED geree par app_blink_led / App_Linky (1s erreur, 3s OK) — pas de toggle TX */
 
@@ -365,7 +260,7 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
         DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
     }
 
-    bool_t bOk = bTransmitWithRetry(au8TxPayload, u8EssTxLen);
+    bool_t bOk = bTransmitAndWait(au8TxPayload, u8EssTxLen);
 
     if (bOk)
     {
@@ -381,22 +276,47 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
                     u8TxSequence - 1, u32ConsecutiveFailures);
     }
 
-    /* ===== 2) Toutes les N ESSENTIAL, programmer un cycle EXTENDED =====
-     * L'EXTENDED n'est pas emis ici mais dans son propre cycle, un demi
-     * intervalle plus tard, pour laisser le supercap se recharger. */
+    /* ===== 2) Toutes les N TX, piggyback EXTENDED ===== */
     u8EssentialCounter++;
     if (u8EssentialCounter >= LORA_TIC_EXTENDED_INTERVAL)
     {
         u8EssentialCounter = 0;
-        bExtPending = TRUE;
-        u32NextDelayMs = u32HalfMs;
-        DBG_vPrintf(TRACE_LORA_TIC,
-                    "LORA_TIC: EXT sub=%d programme dans %lu ms\r\n",
-                    u8ExtSubType, u32NextDelayMs);
-    }
-    else
-    {
-        u32NextDelayMs = u32IntervalMs;
+
+        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
+
+        /* Encrypt if paired */
+        u8ExtLen = APP_u8LoraCryptEncrypt(au8TxPayload, u8ExtLen,
+                                           APP_pu8LoraPairGetKey(),
+                                           APP_pu8LoraPairGetMAC(),
+                                           au8TxPayload[1]);
+
+        /* Hex dump */
+        {
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s] TX [%d]: ",
+                        u8ExtSubType,
+                        (u8ExtLen > LORA_TIC_DATA_EXTENDED_MAX_SIZE) ? "+ENC" : "",
+                        u8ExtLen);
+            int i;
+            for (i = 0; i < u8ExtLen; i++)
+                DBG_vPrintf(TRACE_LORA_TIC, "%02X ", au8TxPayload[i]);
+            DBG_vPrintf(TRACE_LORA_TIC, "\r\n");
+        }
+
+        bool_t bExtOk = bTransmitAndWait(au8TxPayload, u8ExtLen);
+
+        if (bExtOk)
+        {
+            u32TxCount++;
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX #%lu OK (sub=%d seq=%u)\r\n",
+                        u32TxCount, u8ExtSubType, u8TxSequence - 1);
+        }
+        else
+        {
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX FAILED (sub=%d seq=%u)\r\n",
+                        u8ExtSubType, u8TxSequence - 1);
+        }
+
+        u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
     }
 
     /* LED geree par app_blink_led — pas de toggle TX */
@@ -411,8 +331,10 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 
     /* Relancer le timer LoRa pour le prochain cycle
      * (intervalle = temps entre la FIN d'un TX et le DEBUT du suivant).
-     * Vaut un demi-intervalle quand un cycle EXTENDED est intercale. */
-    ZTIMER_eStart(u8TimerLoRa, ZTIMER_TIME_MSEC(u32NextDelayMs));
+     * L'intervalle est pilotable par downlink, d'ou la relecture a chaque
+     * cycle plutot qu'une constante. */
+    ZTIMER_eStart(u8TimerLoRa,
+                  ZTIMER_TIME_MSEC(APP_u8LoraPairGetTxIntervalSec() * 1000UL));
 }
 
 /****************************************************************************
@@ -1466,15 +1388,8 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
         SX1280_HAL_WriteCommand(0x88, &cadParam, 1);
     }
 
-    /* 6) Regulateur : LDO (0x00).
-     * Le module NiceRF LORA1280-TCXO n'a PAS d'inductance DC-DC
-     * (cf. CLAUDE.md : "mode LDO, pas de DC-DC sur le PCB").
-     * En DC-DC sans inductance, le rail interne ne regule pas et le PLL
-     * ne verrouille qu'une fois sur deux : SetTx est accepte (le chip
-     * passe en mode 6) mais rien n'est emis et TX_DONE n'arrive jamais.
-     * C'est exactement le symptome observe. Le LDO est de toute facon
-     * le mode sur : il fonctionne avec ou sans inductance. */
-    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
+    /* 6) Regulator DC-DC (proto custom : L3 15uH presente sur le PCB) */
+    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
 
     /* 7) Frequence : canal demande par l'appelant */
     APP_vLoraChannelSet(u8Channel);
@@ -1584,37 +1499,16 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
 
     DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: Starting TX (silent mode)...\r\n");
 
-    /* ===== Photo de la config juste AVANT le TX =====
-     * But : comparer un TX qui marche et un TX qui echoue. Jusqu'ici la
-     * config n'etait relue qu'apres un echec, sans reference de succes.
-     * Lecture avant SetTx : la regle "zero SPI pendant TX" est respectee. */
-    uint8 au8CfgPre[4] = {0, 0, 0, 0};
-    SX1280_HAL_ReadRegisters(0x0889, &au8CfgPre[0], 1);  /* packet type */
-    SX1280_HAL_ReadRegisters(0x088B, &au8CfgPre[1], 1);  /* SF */
-    SX1280_HAL_ReadRegisters(0x088C, &au8CfgPre[2], 1);  /* BW */
-    SX1280_HAL_ReadRegisters(0x0925, &au8CfgPre[3], 1);  /* config dependante du SF */
-
     DWT->CYCCNT = 0;
     SX1280_SendPayload(pu8Data, u8Len);
-
-    /* Diagnostic retire : la lecture d'etat juste apres SetTx a repondu
-     * (mode=6 systematiquement, le chip part bien en TX), mais elle
-     * violait la regle "ZERO SPI pendant TX" ci-dessus. */
 
     /* ===== ZERO SPI pendant TX =====
      * Apres SendPayload (= SetTx), AUCUN SPI ni UART.
      * Poll DIO1 GPIO uniquement. Timeout 500ms (airtime ~100-160ms).
      */
 
-    /* Timeout de poll TX.
-     * Etait a 500 ms, dimensionne quand le commentaire annoncait un
-     * airtime de "100-160 ms". A SF11 un TX reussi mesure 247-272 ms :
-     * si l'airtime doublait par intermittence (BW ou SF mal appliques),
-     * on tomberait pile sur la limite, ce qui expliquerait des echecs
-     * aleatoires a ~50 %. On elargit largement pour mesurer la verite :
-     * un TX_DONE qui arrive a 600 ms ou 900 ms se verra dans le @%lums. */
     bool_t bDio1Detected = FALSE;
-    uint32 u32WaitCycles = 3000UL * u32CycPerMs;  /* 3 s max */
+    uint32 u32WaitCycles = 500UL * u32CycPerMs;  /* 500ms max */
 
     while (DWT->CYCCNT < u32WaitCycles)
     {
@@ -1651,12 +1545,9 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
     uint16 u16DevErrors = ((uint16)errBuf[0] << 8) | errBuf[1];
 
     DBG_vPrintf(TRACE_LORA_TIC,
-        "LORA_TIC: Post-TX @%lums DIO1det=%d DIO1now=%d "
-        "Status=0x%02X mode=%d IRQ=0x%04X DevErr=0x%04X | "
-        "cfgPreTx: 0889=0x%02X 088B=0x%02X 088C=0x%02X 0925=0x%02X\r\n",
-        u32ElapsedMs, bDio1Detected, u8Dio1,
-        u8Status, u8Mode, u16Irq, u16DevErrors,
-        au8CfgPre[0], au8CfgPre[1], au8CfgPre[2], au8CfgPre[3]);
+        "LORA_TIC: Post-TX @%lums DIO1det=%d DIO1now=%d Status=0x%02X mode=%d "
+        "IRQ=0x%04X DevErr=0x%04X\r\n",
+        u32ElapsedMs, bDio1Detected, u8Dio1, u8Status, u8Mode, u16Irq, u16DevErrors);
 
     if (u16DevErrors != 0)
     {
@@ -1676,112 +1567,17 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
         return TRUE;
     }
 
-    /* Cas 2 : DIO1 pas vu, mais TX_DONE latche dans le registre IRQ —
-     * la trame est bien partie, seule la detection GPIO a ete ratee. */
-    if (u16Irq & SX1280_IRQ_TX_DONE)
+    /* Cas 2 : DIO1 pas vu mais mode STDBY — TX terminee naturellement */
+    if (u8Mode == 2 || u8Mode == 3)
     {
         SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
-        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX OK (IRQ TX_DONE, no DIO1) @%lums\r\n",
-                    u32ElapsedMs);
+        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX OK (STDBY, no DIO1) @%lums\r\n", u32ElapsedMs);
         return TRUE;
     }
 
-    /* Cas 3 : echec.
-     * ATTENTION : ne PAS conclure au succes sur le seul mode STDBY_RC.
-     * Le SX1280 est en STDBY_RC aussi bien apres un TX reussi (retour
-     * automatique) que lorsqu'il n'est JAMAIS parti en TX (SetTx sans
-     * effet). Les deux cas sont indiscernables par le mode ; seul
-     * TX_DONE tranche. L'ancien code renvoyait TRUE sur mode==2/3, ce
-     * qui comptait comme emises des trames jamais transmises (IRQ=0x0000)
-     * et faisait chuter le PDR cote recepteur. */
-    /* Le SX1280 a-t-il REDEMARRE pendant le TX ?
-     * On relit des registres qu'on a explicitement ecrits pendant le
-     * reconfig. S'ils ont repris leur valeur par defaut, le chip a
-     * redemarre (ce qui expliquerait IRQ=0 et DevErr=0, tous deux
-     * remis a zero). S'ils sont intacts, le chip n'a pas redemarre :
-     * le TX a ete avorte, ou termine sans latcher TX_DONE.
-     * Lecture APRES le TX : la regle "zero SPI pendant TX" est respectee. */
-    {
-        uint8 au8Sync[2] = {0, 0};
-        uint8 u8RegSf = 0;
-        SX1280_HAL_ReadRegisters(0x0944, au8Sync, 2);
-        SX1280_HAL_ReadRegisters(0x088B, &u8RegSf, 1);
-        DBG_vPrintf(TRACE_LORA_TIC,
-            "LORA_TIC:   etat chip apres echec : syncword=%02X%02X (ecrit 1424) "
-            "reg088B=0x%02X (SF%d attendu)\r\n",
-            au8Sync[0], au8Sync[1], u8RegSf, APP_u8LoraPairGetSF());
-    }
-
-    SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
-    DBG_vPrintf(TRACE_LORA_TIC,
-                "LORA_TIC: TX FAILED @%lums (mode=%d IRQ=0x%04X) — trame non emise\r\n",
-                u32ElapsedMs, u8Mode, u16Irq);
-    return FALSE;
-}
-
-/****************************************************************************
- *
- * NAME: bTransmitWithRetry
- *
- * DESCRIPTION:
- * Emet la trame et la reemet si le SX1280 n'est pas parti en TX.
- * On reutilise le MEME buffer (donc le meme numero de sequence) : un
- * echec signifie que rien n'a ete emis, la reemission ne cree pas de
- * doublon cote recepteur.
- *
- ****************************************************************************/
-/****************************************************************************
- *
- * NAME: vWaitMs
- *
- * DESCRIPTION:
- * Attente active, ZTIMER et watchdog nourris pendant toute la duree.
- * A n'appeler QUE depuis la boucle main : ZTIMER_vTask() ne doit jamais
- * etre reentrant depuis un callback timer.
- *
- ****************************************************************************/
-PRIVATE void vWaitMs(uint32 u32Ms)
-{
-    uint32 u32StartMs = OSA_TimeGetMsec();
-
-    while ((uint32)(OSA_TimeGetMsec() - u32StartMs) < u32Ms)
-    {
-        ZTIMER_vTask();
-#ifdef WATCHDOG_ALLOWED
-        WWDT_Refresh(WWDT);
-#endif
-    }
-}
-
-PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len)
-{
-    uint8 u8Try;
-
-    for (u8Try = 0; u8Try <= LORA_TIC_TX_MAX_RETRIES; u8Try++)
-    {
-        if (bTransmitAndWait(pu8Data, u8Len))
-        {
-            if (u8Try > 0)
-            {
-                DBG_vPrintf(TRACE_LORA_TIC,
-                            "LORA_TIC: TX rattrape au retry %d\r\n", u8Try);
-            }
-            return TRUE;
-        }
-
-        if (u8Try < LORA_TIC_TX_MAX_RETRIES)
-        {
-            DBG_vPrintf(TRACE_LORA_TIC,
-                        "LORA_TIC: retry TX (%d/%d) apres %d ms de recharge...\r\n",
-                        u8Try + 1, LORA_TIC_TX_MAX_RETRIES,
-                        LORA_TIC_TX_RETRY_BACKOFF_MS);
-
-            /* Laisser le supercap se recharger avant de retenter : sans
-             * cette pause le retry repart sur une alim encore effondree. */
-            vWaitMs(LORA_TIC_TX_RETRY_BACKOFF_MS);
-        }
-    }
-
+    /* Cas 3 : Vrai timeout — ni DIO1 ni retour en STDBY */
+    DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: TX TIMEOUT @%lums (mode=%d)\r\n",
+                u32ElapsedMs, u8Mode);
     return FALSE;
 }
 
