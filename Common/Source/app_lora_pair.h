@@ -88,6 +88,27 @@
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
 
+/* Puissance d'emission pendant l'appairage uniquement (dBm).
+ *
+ * Plus basse que les donnees (+10 dBm) pour reduire le PIC de courant du
+ * PA : ~27 mA a 0 dBm contre ~45 mA a +10 dBm.
+ *
+ * Constate sur le terrain : sur un Linky triphase, TX_DONE ne se leve
+ * JAMAIS pendant l'appairage ("PAIR_REQUEST TX timeout" a chaque essai),
+ * alors qu'il se leve systematiquement sur un monophase place au MEME
+ * endroit, a la MEME distance du recepteur. Or TX_DONE est un evenement
+ * interne au SX1280 : il ne depend ni de la distance, ni du recepteur,
+ * ni de la propagation. La seule variable restante est donc l'energie
+ * fournie par la prise TIC.
+ *
+ * Espacer les PAIR_REQUEST (300 -> 2500 ms) n'a rien change : ce n'est
+ * pas le rapport cyclique moyen mais le pic instantane qui compte.
+ *
+ * L'appairage est une operation de mise en service, faite a proximite du
+ * recepteur : la portee n'y est pas critique. Mesure en monophase lors
+ * d'un appairage reussi : RSSI = -53 dBm, soit une marge enorme. */
+#define LORA_PAIR_TX_POWER_DBM         0
+
 /* LED patterns */
 #define LORA_LED_UNPAIRED_PERIOD_MS    200   /* Fast blink 5Hz */
 #define LORA_LED_PAIRING_ON_MS         100   /* Triple flash */

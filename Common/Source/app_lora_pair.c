@@ -586,6 +586,11 @@ PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF)
      * sync word, packet params, TX power, puis IRQ TX_DONE sur DIO1. */
     APP_vLoRaTicReconfigureRadio(u8Channel, u8SF);
 
+    /* Puissance reduite pour l'appairage : le reconfig ci-dessus applique
+     * la puissance des donnees (+10 dBm), on la remplace ici pour limiter
+     * le pic de courant du PA (cf. LORA_PAIR_TX_POWER_DBM). */
+    SX1280_SetTxParams(LORA_PAIR_TX_POWER_DBM, SX1280_RAMP_20_US);
+
     /* IRQ: TX_DONE + TIMEOUT on DIO1 */
     SX1280_SetDioIrqParams(
         SX1280_IRQ_TX_DONE | SX1280_IRQ_RX_TX_TIMEOUT,
