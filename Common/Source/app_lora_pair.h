@@ -68,8 +68,22 @@
 /* Pairing timeout (30 seconds) */
 #define LORA_PAIR_TIMEOUT_MS           30000
 
-/* Pairing TX interval (300ms between PAIR_REQUEST) */
-#define LORA_PAIR_TX_INTERVAL_MS       300
+/* Intervalle entre deux PAIR_REQUEST.
+ *
+ * ATTENTION au budget d'alimentation TIC. A SF11 un PAIR_REQUEST dure
+ * ~250 ms d'airtime : a 300 ms d'intervalle on emettait ~83 % du temps,
+ * alors que le mode donnees n'emet que 5 % (250 ms toutes les 5 s).
+ * C'est dix fois au-dessus du minimum documente par
+ * LORA_TX_INTERVAL_SEC_MIN ("sous 3 s le budget alim TIC ne suit plus").
+ *
+ * Constate sur le terrain : avec 300 ms, l'appairage fonctionne sur un
+ * Linky monophase mais echoue systematiquement sur un triphase place au
+ * MEME endroit, a la MEME distance du recepteur (donc a RF identique) --
+ * la seule variable restante etant l'energie fournie par la prise TIC.
+ *
+ * A 2500 ms le rapport cyclique retombe a ~10 %, et la fenetre
+ * d'appairage de 30 s laisse encore une douzaine de tentatives. */
+#define LORA_PAIR_TX_INTERVAL_MS       2500
 
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
