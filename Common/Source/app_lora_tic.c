@@ -1510,6 +1510,15 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
     DWT->CYCCNT = 0;
     SX1280_SendPayload(pu8Data, u8Len);
 
+    /* ===== Diagnostic : le chip est-il REELLEMENT parti en TX ? =====
+     * Une seule lecture SPI (~20 us) juste apres SetTx. C'est ce qui
+     * departage les deux causes possibles d'un echec :
+     *   mode != 6 ici  -> SetTx n'a eu aucun effet (le chip n'est jamais
+     *                     parti ; probleme de config / horloge de ref)
+     *   mode == 6 ici, puis STDBY sans TX_DONE -> le chip est bien parti
+     *                     puis a decroche (chute d'alimentation). */
+    uint8 u8ModeAtTxStart = (SX1280_GetStatus() >> 5) & 0x07;
+
     /* ===== ZERO SPI pendant TX =====
      * Apres SendPayload (= SetTx), AUCUN SPI ni UART.
      * Poll DIO1 GPIO uniquement. Timeout 500ms (airtime ~100-160ms).
@@ -1553,9 +1562,10 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
     uint16 u16DevErrors = ((uint16)errBuf[0] << 8) | errBuf[1];
 
     DBG_vPrintf(TRACE_LORA_TIC,
-        "LORA_TIC: Post-TX @%lums DIO1det=%d DIO1now=%d Status=0x%02X mode=%d "
-        "IRQ=0x%04X DevErr=0x%04X\r\n",
-        u32ElapsedMs, bDio1Detected, u8Dio1, u8Status, u8Mode, u16Irq, u16DevErrors);
+        "LORA_TIC: Post-TX @%lums modeAtTxStart=%d DIO1det=%d DIO1now=%d "
+        "Status=0x%02X mode=%d IRQ=0x%04X DevErr=0x%04X\r\n",
+        u32ElapsedMs, u8ModeAtTxStart, bDio1Detected, u8Dio1,
+        u8Status, u8Mode, u16Irq, u16DevErrors);
 
     if (u16DevErrors != 0)
     {
