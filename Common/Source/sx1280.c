@@ -19,7 +19,7 @@ void SX1280_Init(void)
      * - Shield SX1280RF1ZHP (Semtech) : DC-DC sur le PCB -> mode DC-DC
      * - Proto custom (SX1281IMLTRT + L3 15uH) : DC-DC sur le PCB -> mode DC-DC
      */
-    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
+    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
 
     PRINTF("SX1280 initialized\r\n");
 }

@@ -164,7 +164,7 @@ static void ConfigureLoRa(void)
 
 	    // 5) Regulator Mode LDO (par defaut)
 	    //    Le chip demarre en LDO, on peut passer en DC-DC apres si besoin.
-	    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
+	    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
 	    PRINTF("Regulator Mode DC-DC OK\r\n");
 
 	    // 6) Frequence : PAIR_CHANNEL (2440 MHz) pour le test au boot.

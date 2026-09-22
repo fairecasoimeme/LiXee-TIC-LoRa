@@ -1466,8 +1466,15 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
         SX1280_HAL_WriteCommand(0x88, &cadParam, 1);
     }
 
-    /* 6) Regulator DC-DC (proto custom : L3 15uH presente sur le PCB) */
-    SX1280_SetRegulatorMode(SX1280_REGULATOR_DCDC);
+    /* 6) Regulateur : LDO (0x00).
+     * Le module NiceRF LORA1280-TCXO n'a PAS d'inductance DC-DC
+     * (cf. CLAUDE.md : "mode LDO, pas de DC-DC sur le PCB").
+     * En DC-DC sans inductance, le rail interne ne regule pas et le PLL
+     * ne verrouille qu'une fois sur deux : SetTx est accepte (le chip
+     * passe en mode 6) mais rien n'est emis et TX_DONE n'arrive jamais.
+     * C'est exactement le symptome observe. Le LDO est de toute facon
+     * le mode sur : il fonctionne avec ou sans inductance. */
+    SX1280_SetRegulatorMode(SX1280_REGULATOR_LDO);
 
     /* 7) Frequence : canal demande par l'appelant */
     APP_vLoraChannelSet(u8Channel);
