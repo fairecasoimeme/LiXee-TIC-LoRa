@@ -132,10 +132,22 @@ PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
 PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len);
+PRIVATE void vWaitMs(uint32 u32Ms);
 PRIVATE uint8 u8HexCharToNibble(uint8 u8Char);
 
 /* Nombre de reemissions sur echec (0 = pas de retry). */
 #define LORA_TIC_TX_MAX_RETRIES  1
+
+/* Temps de recuperation entre l'acquisition TIC et le TX ESSENTIAL (ms).
+ *
+ * Observation terrain decisive : l'EXTENDED, emis dans son cycle dedie
+ * SANS acquisition TIC prealable, passe (TX OK @247 ms) ; l'ESSENTIAL,
+ * emis juste apres vAPP_LinkySensorSample(), echoue. Meme airtime
+ * (28 symboles dans les deux cas), memes payloads a un octet pres.
+ * Le facteur discriminant est donc l'acquisition TIC qui precede -- et
+ * c'est exactement ce qui double de duree en triphase, d'ou un mode
+ * mono sain et un triphase qui s'effondre. */
+#define LORA_TIC_POST_TIC_SETTLE_MS   1500
 
 /* Temps de recharge avant une reemission (ms).
  * Diagnostic terrain : sur un echec, modeAtTxStart=6 (le SX1280 part bien
@@ -320,9 +332,15 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 #ifdef WATCHDOG_ALLOWED
     /* La boucle d'acquisition TIC sort par break des que la trame est
      * complete, en sautant son WWDT_Refresh : on repart d'un compteur
-     * propre avant d'enchainer ~900 ms de TX/RX. */
+     * propre avant d'enchainer le TX. */
     WWDT_Refresh(WWDT);
 #endif
+
+    /* Fenetre de recuperation entre l'acquisition TIC et le TX.
+     * C'est l'acquisition qui precede le TX qui fait echouer l'ESSENTIAL
+     * (cf. LORA_TIC_POST_TIC_SETTLE_MS) : on laisse le temps a l'alim de
+     * remonter avant d'engager le PA. */
+    vWaitMs(LORA_TIC_POST_TIC_SETTLE_MS);
 
     /* LED geree par app_blink_led / App_Linky (1s erreur, 3s OK) — pas de toggle TX */
 
@@ -1562,14 +1580,9 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
     DWT->CYCCNT = 0;
     SX1280_SendPayload(pu8Data, u8Len);
 
-    /* ===== Diagnostic : le chip est-il REELLEMENT parti en TX ? =====
-     * Une seule lecture SPI (~20 us) juste apres SetTx. C'est ce qui
-     * departage les deux causes possibles d'un echec :
-     *   mode != 6 ici  -> SetTx n'a eu aucun effet (le chip n'est jamais
-     *                     parti ; probleme de config / horloge de ref)
-     *   mode == 6 ici, puis STDBY sans TX_DONE -> le chip est bien parti
-     *                     puis a decroche (chute d'alimentation). */
-    uint8 u8ModeAtTxStart = (SX1280_GetStatus() >> 5) & 0x07;
+    /* Diagnostic retire : la lecture d'etat juste apres SetTx a repondu
+     * (mode=6 systematiquement, le chip part bien en TX), mais elle
+     * violait la regle "ZERO SPI pendant TX" ci-dessus. */
 
     /* ===== ZERO SPI pendant TX =====
      * Apres SendPayload (= SetTx), AUCUN SPI ni UART.
@@ -1614,9 +1627,9 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
     uint16 u16DevErrors = ((uint16)errBuf[0] << 8) | errBuf[1];
 
     DBG_vPrintf(TRACE_LORA_TIC,
-        "LORA_TIC: Post-TX @%lums modeAtTxStart=%d DIO1det=%d DIO1now=%d "
+        "LORA_TIC: Post-TX @%lums DIO1det=%d DIO1now=%d "
         "Status=0x%02X mode=%d IRQ=0x%04X DevErr=0x%04X\r\n",
-        u32ElapsedMs, u8ModeAtTxStart, bDio1Detected, u8Dio1,
+        u32ElapsedMs, bDio1Detected, u8Dio1,
         u8Status, u8Mode, u16Irq, u16DevErrors);
 
     if (u16DevErrors != 0)
@@ -1673,6 +1686,29 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
  * doublon cote recepteur.
  *
  ****************************************************************************/
+/****************************************************************************
+ *
+ * NAME: vWaitMs
+ *
+ * DESCRIPTION:
+ * Attente active, ZTIMER et watchdog nourris pendant toute la duree.
+ * A n'appeler QUE depuis la boucle main : ZTIMER_vTask() ne doit jamais
+ * etre reentrant depuis un callback timer.
+ *
+ ****************************************************************************/
+PRIVATE void vWaitMs(uint32 u32Ms)
+{
+    uint32 u32StartMs = OSA_TimeGetMsec();
+
+    while ((uint32)(OSA_TimeGetMsec() - u32StartMs) < u32Ms)
+    {
+        ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+        WWDT_Refresh(WWDT);
+#endif
+    }
+}
+
 PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len)
 {
     uint8 u8Try;
@@ -1698,19 +1734,7 @@ PRIVATE bool_t bTransmitWithRetry(uint8 *pu8Data, uint8 u8Len)
 
             /* Laisser le supercap se recharger avant de retenter : sans
              * cette pause le retry repart sur une alim encore effondree. */
-            {
-                uint32 u32StartMs = OSA_TimeGetMsec();
-                while ((uint32)(OSA_TimeGetMsec() - u32StartMs)
-                                            < LORA_TIC_TX_RETRY_BACKOFF_MS)
-                {
-                    /* Contexte boucle main (pas un callback timer) :
-                     * ZTIMER_vTask() est donc sur ici. */
-                    ZTIMER_vTask();
-#ifdef WATCHDOG_ALLOWED
-                    WWDT_Refresh(WWDT);
-#endif
-                }
-            }
+            vWaitMs(LORA_TIC_TX_RETRY_BACKOFF_MS);
         }
     }
 
