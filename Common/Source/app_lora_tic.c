@@ -1668,6 +1668,24 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
      * TX_DONE tranche. L'ancien code renvoyait TRUE sur mode==2/3, ce
      * qui comptait comme emises des trames jamais transmises (IRQ=0x0000)
      * et faisait chuter le PDR cote recepteur. */
+    /* Le SX1280 a-t-il REDEMARRE pendant le TX ?
+     * On relit des registres qu'on a explicitement ecrits pendant le
+     * reconfig. S'ils ont repris leur valeur par defaut, le chip a
+     * redemarre (ce qui expliquerait IRQ=0 et DevErr=0, tous deux
+     * remis a zero). S'ils sont intacts, le chip n'a pas redemarre :
+     * le TX a ete avorte, ou termine sans latcher TX_DONE.
+     * Lecture APRES le TX : la regle "zero SPI pendant TX" est respectee. */
+    {
+        uint8 au8Sync[2] = {0, 0};
+        uint8 u8RegSf = 0;
+        SX1280_HAL_ReadRegisters(0x0944, au8Sync, 2);
+        SX1280_HAL_ReadRegisters(0x088B, &u8RegSf, 1);
+        DBG_vPrintf(TRACE_LORA_TIC,
+            "LORA_TIC:   etat chip apres echec : syncword=%02X%02X (ecrit 1424) "
+            "reg088B=0x%02X (SF%d attendu)\r\n",
+            au8Sync[0], au8Sync[1], u8RegSf, APP_u8LoraPairGetSF());
+    }
+
     SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
     DBG_vPrintf(TRACE_LORA_TIC,
                 "LORA_TIC: TX FAILED @%lums (mode=%d IRQ=0x%04X) — trame non emise\r\n",
