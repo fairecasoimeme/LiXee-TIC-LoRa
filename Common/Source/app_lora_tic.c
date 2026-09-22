@@ -1577,6 +1577,16 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
 
     DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: Starting TX (silent mode)...\r\n");
 
+    /* ===== Photo de la config juste AVANT le TX =====
+     * But : comparer un TX qui marche et un TX qui echoue. Jusqu'ici la
+     * config n'etait relue qu'apres un echec, sans reference de succes.
+     * Lecture avant SetTx : la regle "zero SPI pendant TX" est respectee. */
+    uint8 au8CfgPre[4] = {0, 0, 0, 0};
+    SX1280_HAL_ReadRegisters(0x0889, &au8CfgPre[0], 1);  /* packet type */
+    SX1280_HAL_ReadRegisters(0x088B, &au8CfgPre[1], 1);  /* SF */
+    SX1280_HAL_ReadRegisters(0x088C, &au8CfgPre[2], 1);  /* BW */
+    SX1280_HAL_ReadRegisters(0x0925, &au8CfgPre[3], 1);  /* config dependante du SF */
+
     DWT->CYCCNT = 0;
     SX1280_SendPayload(pu8Data, u8Len);
 
@@ -1635,9 +1645,11 @@ PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len)
 
     DBG_vPrintf(TRACE_LORA_TIC,
         "LORA_TIC: Post-TX @%lums DIO1det=%d DIO1now=%d "
-        "Status=0x%02X mode=%d IRQ=0x%04X DevErr=0x%04X\r\n",
+        "Status=0x%02X mode=%d IRQ=0x%04X DevErr=0x%04X | "
+        "cfgPreTx: 0889=0x%02X 088B=0x%02X 088C=0x%02X 0925=0x%02X\r\n",
         u32ElapsedMs, bDio1Detected, u8Dio1,
-        u8Status, u8Mode, u16Irq, u16DevErrors);
+        u8Status, u8Mode, u16Irq, u16DevErrors,
+        au8CfgPre[0], au8CfgPre[1], au8CfgPre[2], au8CfgPre[3]);
 
     if (u16DevErrors != 0)
     {
