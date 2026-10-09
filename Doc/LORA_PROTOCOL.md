@@ -762,7 +762,28 @@ Types ZCL utilisés :
 
 **Tous les attributs TIC disponibles sont adressables**, répartis sur 4 clusters
 aux mêmes identifiants que le firmware Zigbee LiXee — la connaissance des
-clusters se transfère d'un monde à l'autre.
+clusters se transfère d'un monde à l'autre. S'y ajoute le cluster **Basic**,
+qui décrit l'objet lui-même et non le compteur.
+
+**Cluster Basic `0x0000`** (identification de l'objet) :
+
+| attr | Champ | Type | Valeur ZLinky LoRa |
+|---|---|---|---|
+| `0xFF00` | **device_id** | uint16 | `0x0051` |
+| `0x0005` | **ModelIdentifier** | char string | `"ZLinky_TIC"` |
+
+> **À quoi ça sert** : après l'appairage, le récepteur interroge d'abord
+> `0xFF00` pour connaître le `device_id` — qui nomme le fichier
+> `data/tp/<device_id>.json` — puis `0x0005` pour le `model`, qui en est la clé.
+> Il peut alors appliquer le bon template.
+>
+> **Pourquoi en POLL et non dans le PAIR_REQUEST** : ces deux champs y étaient
+> auparavant, et faisaient passer la trame de 11 à 24 octets, soit **8,7 →
+> 12,1 mA·s** à SF11. C'est au-delà du budget d'alimentation de la prise TIC de
+> certains compteurs, et l'appairage devenait **impossible** — le PAIR_REQUEST
+> est la trame la plus répétée du protocole. Les exposer en POLL ne coûte rien
+> sur le chemin critique : le récepteur les demande **une seule fois**, quand il
+> veut, après l'appairage. Le PAIR_REQUEST reste au format 11 octets.
 
 **Cluster LiXee `0xFF66`** (données TIC spécifiques) :
 

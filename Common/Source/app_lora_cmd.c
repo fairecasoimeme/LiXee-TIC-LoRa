@@ -275,6 +275,24 @@ PRIVATE int iBuildPollValue(uint16 u16Cluster, uint16 u16Attr,
 {
     tsCLD_Linky *pL = &sBaseDevice.sLinkyServerCluster;
 
+    /* ========== Cluster Basic 0x0000 (identification de l'objet) ==========
+     * Permet au recepteur de choisir son template apres l'appairage, sans
+     * alourdir le PAIR_REQUEST (cf. LORA_CLUSTER_BASIC dans le .h). */
+    if (u16Cluster == LORA_CLUSTER_BASIC)
+    {
+        static const char szModel[] = LORA_DEVICE_MODEL_ZLINKY_TIC;
+
+        switch (u16Attr)
+        {
+        case LORA_ATTR_BASIC_DEVICE_ID:
+            POLL_U16(LORA_DEVICE_ID_ZLINKY_TIC);
+        case LORA_ATTR_BASIC_MODEL:
+            POLL_STR((const uint8 *)szModel, (uint8)(sizeof(szModel) - 1));
+        default:
+            return -1;
+        }
+    }
+
     /* ================= Cluster LiXee 0xFF66 (donnees TIC) ================= */
     if (u16Cluster == LORA_CLUSTER_LIXEE)
     {
