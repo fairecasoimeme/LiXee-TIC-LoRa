@@ -1464,7 +1464,7 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
     /* 10) Packet params */
     {
         SX1280_LoRaPacketParams_t pktParams;
-        pktParams.preambleLength = 0x18;
+        pktParams.preambleLength = SX1280_LORA_PREAMBLE;
         pktParams.headerType     = SX1280_LORA_HEADER_EXPLICIT;
         pktParams.payloadLength  = 255;
         pktParams.crc            = SX1280_LORA_CRC_ON;

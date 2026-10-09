@@ -84,6 +84,29 @@
 #define SX1280_LORA_BW_812                  0x18  // 812 kHz
 #define SX1280_LORA_BW_1625                 0x0A  // 1625 kHz
 
+// ===== Longueur du preambule LoRa =====
+//
+// ATTENTION a l'encodage : mantisse * 2^exposant sur 1 octet.
+//   bits[3:0] = mantisse (1..15), bits[7:4] = exposant (0..15)
+// Une valeur brute comme 16 (0x10) donne mantisse=0, ce qui est INVALIDE
+// (bug deja rencontre sur ce projet, il empechait toute reception).
+//
+// /!\ VALEUR BILATERALE : le preambleLength du recepteur doit etre
+// INFERIEUR OU EGAL a celui qu'on emet, sinon il attend des symboles qui
+// n'arrivent jamais et la detection echoue completement.
+//
+// Pourquoi 8 symboles : a SF11/BW406 le preambule coute 102 ms a 16
+// symboles contre 62 ms a 8, soit 1,8 mA.s economises sur CHAQUE trame.
+// Le budget d'alimentation de la prise TIC limite la charge par emission,
+// et a 11,0 mA.s seules ~36 % des trames aboutissent sur certains
+// compteurs (contre 100 % a 8,7 mA.s). La sensibilite, elle, ne depend
+// que du SF/BW/CR : 8 symboles ne coute donc pas de portee, seulement un
+// peu de marge de detection a tres faible SNR. LoRaWAN utilise 8
+// symboles pour tous ses uplinks, c'est une valeur eprouvee.
+#define SX1280_PREAMBLE_8_SYM               0x08  // 8 * 2^0 =  8 symboles
+#define SX1280_PREAMBLE_16_SYM              0x18  // 8 * 2^1 = 16 symboles
+#define SX1280_LORA_PREAMBLE                SX1280_PREAMBLE_8_SYM
+
 // ===== LoRa Coding Rates =====
 #define SX1280_LORA_CR_4_5                  0x01
 #define SX1280_LORA_CR_4_6                  0x02
