@@ -760,6 +760,12 @@ ignorer le paquet.
 > monophasé Historique ils valent 0. `PEJP` n'a de sens que pour un abonné
 > **option EJP**.
 
+> **Fin d'alerte** : `PEJP` et `ADIR1/2/3` ne sont émis par le compteur que
+> pendant l'événement. Le ZLinky les remet à **0** après 2 trames TIC valides
+> consécutives sans l'étiquette (~18 s) ; `0` signifie donc « pas d'alerte en
+> cours ». Le début comme la fin de l'alerte déclenchent une trame
+> prioritaire (§5).
+
 ---
 
 ## 8. Lecture d'attribut à la demande (bidirectionnel)
