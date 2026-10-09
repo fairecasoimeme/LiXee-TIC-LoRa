@@ -100,6 +100,81 @@ PRIVATE uint8 au8TxPayload[LORA_TIC_MAX_PAYLOAD + LORA_CRYPT_MIC_SIZE];
 PRIVATE uint8 u8EssentialCounter = 0;
 PRIVATE uint8 u8ExtSubType = 0;
 
+/* Table de sequence des sous-types EXTENDED.
+ *
+ * Une rotation uniforme (n+1) % LORA_TIC_EXT_SUBTYPE_COUNT donnait la meme
+ * part a tous les sous-types : le numero de serie du compteur, qui ne change
+ * jamais, passait aussi souvent que les index d'energie. Resultat mesure :
+ * EAST / EASF01 / HCHC / BASE n'etaient rafraichis qu'une fois par tour
+ * complet, soit toutes les ~7 min 30 (un EXTENDED tous les ~37,5 s reels,
+ * x 12 sous-types).
+ *
+ * La table ci-dessous pondere la rotation sans rien couter : meme debit, meme
+ * nombre de trames, seul l'ordre change. ENERGY (0x01) occupe un creneau sur
+ * trois, les sous-types utiles gardent leur cadence d'avant, et seuls les
+ * quasi-statiques (serie, date, complement, alertes histo) ralentissent.
+ *
+ * Cadences resultantes a ~37,5 s par EXTENDED :
+ *   0x01 ENERGY           8 creneaux -> ~1 min 52   (etait 7 min 30)
+ *   0x00 CURRENT_VOLTAGE  2 creneaux -> ~7 min 30
+ *   0x04 POWER_MAX_CFG    2 creneaux -> ~7 min 30
+ *   0x03 VOLTAGE_STATS    2 creneaux -> ~7 min 30
+ *   0x05 DAILY_ENERGY     2 creneaux -> ~7 min 30
+ *   0x07 TARIFF_LABEL     2 creneaux -> ~7 min 30
+ *   0x02 ENERGY_2         1 creneau  -> ~15 min   (Tempo, varie peu)
+ *   0x0A TARIFF_OPTION    1 creneau  -> ~15 min   (OPTARIF/DEMAIN, journalier)
+ *   0x08 METER_SERIAL     1 creneau  -> ~15 min   (statique)
+ *   0x09 METER_DATE       1 creneau  -> ~15 min   (statique)
+ *   0x06 COMPLEMENT       1 creneau  -> ~15 min   (statique)
+ *   0x0B HISTO_ALERTS     1 creneau  -> ~15 min   (statique hors PEJP)
+ *
+ * Les 12 sous-types sont tous presents : le recepteur finit par tout voir.
+ * Pour reponderer, il suffit d'ajouter/retirer des creneaux — la longueur de
+ * la table est libre, elle n'a pas besoin d'etre un multiple de quoi que ce
+ * soit. */
+PRIVATE const uint8 au8ExtSchedule[] =
+{
+    LORA_TIC_EXT_ENERGY,            /*  0 */
+    LORA_TIC_EXT_CURRENT_VOLTAGE,   /*  1 */
+    LORA_TIC_EXT_POWER_MAX_CFG,     /*  2 */
+    LORA_TIC_EXT_ENERGY,            /*  3 */
+    LORA_TIC_EXT_VOLTAGE_STATS,     /*  4 */
+    LORA_TIC_EXT_DAILY_ENERGY,      /*  5 */
+    LORA_TIC_EXT_ENERGY,            /*  6 */
+    LORA_TIC_EXT_TARIFF_LABEL,      /*  7 */
+    LORA_TIC_EXT_ENERGY_2,          /*  8 */
+    LORA_TIC_EXT_ENERGY,            /*  9 */
+    LORA_TIC_EXT_CURRENT_VOLTAGE,   /* 10 */
+    LORA_TIC_EXT_POWER_MAX_CFG,     /* 11 */
+    LORA_TIC_EXT_ENERGY,            /* 12 */
+    LORA_TIC_EXT_VOLTAGE_STATS,     /* 13 */
+    LORA_TIC_EXT_DAILY_ENERGY,      /* 14 */
+    LORA_TIC_EXT_ENERGY,            /* 15 */
+    LORA_TIC_EXT_TARIFF_LABEL,      /* 16 */
+    LORA_TIC_EXT_TARIFF_OPTION,     /* 17 */
+    LORA_TIC_EXT_ENERGY,            /* 18 */
+    LORA_TIC_EXT_METER_SERIAL,      /* 19 */
+    LORA_TIC_EXT_METER_DATE,        /* 20 */
+    LORA_TIC_EXT_ENERGY,            /* 21 */
+    LORA_TIC_EXT_COMPLEMENT,        /* 22 */
+    LORA_TIC_EXT_HISTO_ALERTS,      /* 23 */
+};
+
+#define LORA_TIC_EXT_SCHEDULE_LEN   (sizeof(au8ExtSchedule) / sizeof(au8ExtSchedule[0]))
+
+/* Creneau courant dans au8ExtSchedule[] */
+PRIVATE uint8 u8ExtSlot = 0;
+
+/* Tour de demarrage : apres chaque reset, les LORA_TIC_EXT_SUBTYPE_COUNT
+ * sous-types sont emis une fois chacun, dans l'ordre 0x00..0x0B, AVANT
+ * d'entrer dans la table ponderee. Sans cela, le recepteur attendrait jusqu'a
+ * ~15 min pour revoir un quasi-statique (numero de serie, complement...)
+ * apres un redemarrage du ZLinky. Duree du tour : 12 x ~37,5 s = ~7 min 30.
+ *
+ * Compte les EXTENDED emis pendant ce tour ; sature a SUBTYPE_COUNT. Une
+ * trame en echec n'est pas rejouee : elle reviendra par la table. */
+PRIVATE uint8 u8ExtBootSent = 0;
+
 
 /****************************************************************************/
 /***        Exported Variables                                            ***/
@@ -336,7 +411,21 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
                         u8ExtSubType, u8TxSequence - 1);
         }
 
-        u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
+        /* Sous-type suivant : fin du tour de demarrage, puis table ponderee */
+        if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
+        {
+            u8ExtBootSent++;
+        }
+
+        if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
+        {
+            u8ExtSubType = u8ExtBootSent;
+        }
+        else
+        {
+            u8ExtSubType = au8ExtSchedule[u8ExtSlot];
+            u8ExtSlot = (uint8)((u8ExtSlot + 1) % LORA_TIC_EXT_SCHEDULE_LEN);
+        }
     }
 
     /* LED geree par app_blink_led — pas de toggle TX */

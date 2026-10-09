@@ -275,11 +275,54 @@ le device connaît bien la clé → appairage validé.
 
 | Élément | Période |
 |---|---|
-| DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, négociée à l'appairage) |
-| DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
-| Cycle complet des 12 sous-types EXTENDED | **~240 s** (~4 min) |
+| Élément | Nominal | Mesuré (Standard triphasé) |
+|---|---|---|
+| DATA_ESSENTIAL | 5 s (négocié à l'appairage) | **~9 s** |
+| DATA_EXTENDED | 1 tous les 4 ESSENTIAL → 20 s | **~37,5 s** |
 
-Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0B → 0x00 …
+> **Pourquoi l'écart** : l'intervalle de 5 s ne redémarre qu'**après** la fin
+> du cycle, et chaque cycle commence par une acquisition TIC bloquante (~3 s
+> en Standard triphasé à 9600 bauds), suivie du TX, de la fenêtre RX de 300 ms
+> et, une fois sur quatre, de l'intervalle inter-trames et de l'EXTENDED. Le
+> récepteur ne doit donc **pas** déduire une perte de trame d'un écart
+> supérieur à 5 s : seul le numéro de séquence fait foi.
+
+### Ordre des sous-types EXTENDED
+
+Les sous-types ne tournent **pas** en round-robin uniforme : l'ordre suit une
+table de séquence pondérée, pour que les index d'énergie soient rafraîchis
+plus souvent que les données qui ne changent jamais.
+
+**1. Tour de démarrage** — après chaque reset du ZLinky, les 12 sous-types
+sont émis une fois chacun dans l'ordre `0x00 → 0x01 → … → 0x0B` (~7 min 30).
+Le récepteur dispose ainsi de toutes les données, y compris les
+quasi-statiques, sans attendre leur créneau dans la table.
+
+**2. Table pondérée** — ensuite, 24 créneaux répétés indéfiniment :
+
+```
+01 00 04  01 03 05  01 07 02  01 00 04  01 03 05  01 07 0A  01 08 09  01 06 0B
+```
+
+| Sous-type | Créneaux / 24 | Période (à ~37,5 s par EXTENDED) |
+|---|---|---|
+| `0x01` ENERGY | 8 | **~1 min 52** |
+| `0x00` CURRENT_VOLTAGE | 2 | ~7 min 30 |
+| `0x03` VOLTAGE_STATS | 2 | ~7 min 30 |
+| `0x04` POWER_MAX_CFG | 2 | ~7 min 30 |
+| `0x05` DAILY_ENERGY | 2 | ~7 min 30 |
+| `0x07` TARIFF_LABEL | 2 | ~7 min 30 |
+| `0x02` ENERGY_2 | 1 | ~15 min |
+| `0x06` COMPLEMENT | 1 | ~15 min |
+| `0x08` METER_SERIAL | 1 | ~15 min |
+| `0x09` METER_DATE | 1 | ~15 min |
+| `0x0A` TARIFF_OPTION | 1 | ~15 min |
+| `0x0B` HISTO_ALERTS | 1 | ~15 min |
+
+Le débit radio est inchangé (même nombre de trames) : seul l'ordre change.
+Le récepteur ne doit faire **aucune hypothèse sur l'ordre** d'arrivée — il
+identifie chaque trame par son octet de sous-type. Une donnée nécessaire plus
+vite que sa période peut être lue à la demande par POLL (§8).
 
 Un EXTENDED est envoyé **après** l'ESSENTIAL correspondant (piggyback), en deux
 trames radio distinctes, séparées par un **intervalle d'environ 1 s**.
@@ -626,9 +669,9 @@ horloge synchronisée) :
 type
 ```
 
-> ⚠️ **Fraîcheur** : ce sous-type ne passe qu'une fois par cycle round-robin,
-> soit toutes les ~3 min 40. L'horodate reçue peut donc avoir jusqu'à ~3 min
-> de retard — utilisable pour vérifier/dériver l'horloge du compteur, pas
+> ⚠️ **Fraîcheur** : ce sous-type n'occupe qu'un créneau de la table de
+> séquence (§5), soit toutes les ~15 min. L'horodate reçue peut donc avoir
+> jusqu'à ~15 min de retard — utilisable pour vérifier/dériver l'horloge du compteur, pas
 > comme source de temps précise.
 
 ### 7.11 Sub-type `0x0A` — TARIFF_OPTION (16 octets)
