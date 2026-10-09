@@ -48,20 +48,26 @@
  *
  * ⚠️ DOIT etre identique cote recepteur : le rendez-vous doit etre connu
  * a l'avance des deux cotes. Changer cette valeur sans changer le
- * recepteur rend l'appairage totalement impossible.
+ * recepteur rend l'appairage totalement IMPOSSIBLE (aucune negociation
+ * n'est possible a ce stade).
  *
- * SF10 plutot que SF11 : le Linky n'est pas mobile, l'appairage se fait
- * donc a la distance operationnelle reelle et doit rester a +10 dBm.
- * Baisser le SF est le seul levier qui reduit la charge tiree SANS
- * sacrifier la portee -- le budget d'alimentation de la prise TIC limite
- * la CHARGE par emission (courant x airtime), pas le courant instantane.
+ * Historique des mesures terrain, a +10 dBm :
+ *   PAIR_REQUEST SF11 : 45 mA x 247 ms = 11,1 mA.s
+ *       -> OK sur Linky monophase, ECHOUE sur triphase (le recepteur ne
+ *          recoit rien), les deux compteurs etant au MEME endroit, a la
+ *          MEME distance du recepteur
+ *   PAIR_REQUEST SF10 : 45 mA x 124 ms =  5,6 mA.s
+ *       -> OK sur les deux
  *
- *   PAIR_REQUEST SF11 / +10 dBm : 45 mA x 247 ms = 11,1 mA.s  -> echouait
- *   PAIR_REQUEST SF10 / +10 dBm : 45 mA x 124 ms =  5,6 mA.s  -> OK
+ * Le budget d'alimentation de la prise TIC limite la CHARGE par emission
+ * (courant x airtime), pas le courant instantane, et ce budget varie
+ * selon le compteur : le seuil se situe entre ~7 et ~11 mA.s.
  *
- * Cout : -2,5 dB de sensibilite, contre -10 dB si on avait baisse la
- * puissance a 0 dBm pour un gain de charge moindre (6,7 mA.s). */
-#define LORA_PAIR_SF                   10
+ * SF11 est donc a la limite : il tient sur les installations favorables
+ * et lache sur les autres. Pour l'avoir partout il faut de la marge
+ * materielle (LDO unique : ~5 mA permanents rendus, soit ~19 % du
+ * budget ; et/ou supercap plus gros). */
+#define LORA_PAIR_SF                   11
 
 /* Extension PAIR_REQUEST (LiXee-Box >= v2.22) :
  *   Format 14+N octets, retro-compatible avec les receivers antérieurs

@@ -30,7 +30,7 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | 0 | 2 410 MHz | bas de bande |
 | 1 | 2 420 MHz | |
 | 2 | 2 430 MHz | |
-| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés, **SF10**) |
+| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés, **SF11**) |
 | 4 | 2 450 MHz | |
 | 5 | 2 460 MHz | |
 | 6 | 2 470 MHz | |
@@ -121,21 +121,28 @@ PAIR_REQUEST, etc.
 
 ## 4. Appairage
 
-L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF10**, quelle que soit
+L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF11**, quelle que soit
 la configuration opérationnelle. C'est ce qui permet à un ZLinky qui tourne en
 SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre une
 fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
 300 ms et écoute 200 ms après chaque envoi.
 
-> ⚠️ **Le rendez-vous est passé de SF11 à SF10** — le récepteur doit écouter sa
-> fenêtre d'appairage en **SF10**, sinon plus aucun appairage n'est possible.
+> ⚠️ **Le SF du rendez-vous doit être identique côté récepteur**, sinon plus
+> aucun appairage n'est possible — il n'y a pas de négociation à ce stade.
 >
-> Raison : le Linky n'est pas mobile, donc l'appairage se fait à la distance
-> opérationnelle réelle et doit rester à +10 dBm. Or à SF11/+10 dBm la charge
-> tirée (45 mA × 247 ms = 11,1 mA·s) dépassait le budget de la prise TIC sur
-> certaines installations, et l'émission n'aboutissait pas. SF10 la ramène à
-> 5,6 mA·s **sans toucher à la puissance**, pour seulement −2,5 dB de
-> sensibilité.
+> **SF11 est à la limite du budget d'alimentation TIC.** Mesures terrain à
+> +10 dBm, deux compteurs au même endroit et à la même distance du récepteur :
+>
+> | Rendez-vous | Charge par PAIR_REQUEST | Monophasé | Triphasé |
+> |---|---|---|---|
+> | SF11 | 45 mA × 247 ms = 11,1 mA·s | ✅ | ❌ rien reçu |
+> | SF10 | 45 mA × 124 ms = 5,6 mA·s | ✅ | ✅ |
+>
+> Le budget limite la **charge** par émission (courant × airtime), pas le
+> courant instantané, et il **varie selon le compteur** : le seuil est entre
+> ~7 et ~11 mA·s. SF11 tient donc sur les installations favorables et lâche
+> sur les autres. Passer le rendez-vous en SF10 le rend fiable partout, pour
+> −2,5 dB de sensibilité et sans toucher à la puissance.
 
 **C'est l'appairage qui fixe le SF et le canal opérationnels.** Ce sont des
 paramètres **réseau**, communs à tous les ZLinky d'un même récepteur, pas des
@@ -143,7 +150,7 @@ réglages par appareil. Pour les changer, on **refait un appairage** (appui long
 
 ```
 device                                box
-  │         (rendez-vous : canal 3, SF10)
+  │         (rendez-vous : canal 3, SF11)
   │──── PAIR_REQUEST ────────────────▶│
   │                                    │  génère clé AES-128
   │                                    │  choisit op_channel + op_SF
