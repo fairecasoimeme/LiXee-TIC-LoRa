@@ -91,22 +91,27 @@
 /* Pairing timeout (30 seconds) */
 #define LORA_PAIR_TIMEOUT_MS           30000
 
-/* Intervalle entre deux PAIR_REQUEST.
+/* Intervalle entre deux PAIR_REQUEST = temps de RECHARGE du supercap
+ * avant chaque tentative.
  *
- * ATTENTION au budget d'alimentation TIC. A SF11 un PAIR_REQUEST dure
- * ~250 ms d'airtime : a 300 ms d'intervalle on emettait ~83 % du temps,
- * alors que le mode donnees n'emet que 5 % (250 ms toutes les 5 s).
- * C'est dix fois au-dessus du minimum documente par
- * LORA_TX_INTERVAL_SEC_MIN ("sous 3 s le budget alim TIC ne suit plus").
+ * Le budget d'alimentation TIC limite la charge par emission (courant x
+ * airtime) et, a SF11, on est pile au seuil sur certains compteurs. Le
+ * temps de recharge devient alors determinant. Mesures terrain, a
+ * charge identique (11,1 mA.s par trame, SF11 / +10 dBm) :
  *
- * Constate sur le terrain : avec 300 ms, l'appairage fonctionne sur un
- * Linky monophase mais echoue systematiquement sur un triphase place au
- * MEME endroit, a la MEME distance du recepteur (donc a RF identique) --
- * la seule variable restante etant l'energie fournie par la prise TIC.
+ *   appairage, recharge 2,5 s -> ECHOUE toujours   (triphase)
+ *   donnees,   recharge 5,0 s -> passe en partie   (triphase)
+ *   appairage/donnees, SF10   -> OK partout
  *
- * A 2500 ms le rapport cyclique retombe a ~10 %, et la fenetre
- * d'appairage de 30 s laisse encore une douzaine de tentatives. */
-#define LORA_PAIR_TX_INTERVAL_MS       2500
+ * D'ou 6000 ms : on donne a chaque PAIR_REQUEST une recharge superieure
+ * a celle des donnees, qui passent deja partiellement.
+ *
+ * Le cout est nul en nombre d'essais : contrairement a ce que suggere
+ * LORA_PAIR_TIMEOUT_MS (defini mais JAMAIS utilise), l'emetteur reessaie
+ * indefiniment jusqu'a etre appaire -- les 30 s sont la fenetre du
+ * RECEPTEUR. Et l'appairage n'a besoin que d'UN succes, contrairement
+ * aux donnees ou chaque echec est une trame perdue. */
+#define LORA_PAIR_TX_INTERVAL_MS       6000
 
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
