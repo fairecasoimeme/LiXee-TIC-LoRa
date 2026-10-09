@@ -76,7 +76,29 @@
  *   [13]    longueur du model (N)
  *   [14..]  model ASCII (N octets)
  */
-#define LORA_PAIR_REQUEST_HAS_EXT      1  /* 1 = envoie l'extension, 0 = format legacy 11 octets */
+/* 1 = envoie l'extension (device_id + model), 0 = format legacy 11 octets.
+ *
+ * TEST EN COURS (a trancher apres essais) : passe a 0 pour discriminer la
+ * cause de l'echec d'appairage sur Linky triphase.
+ *
+ * Le LoRa quantifie par blocs de symboles, et 24 octets franchissent une
+ * marche que 19 octets ne franchissent pas (SF11/BW406) :
+ *
+ *   PAIR_REQUEST 24 o (avec ext) : 33 symboles, 268 ms -> 12,1 mA.s  ECHOUE
+ *   trame donnees  19 o          : 28 symboles, 243 ms -> 10,9 mA.s  passe
+ *                                                                    en partie
+ *   PAIR_REQUEST 11 o (legacy)   : 18 symboles, 193 ms ->  8,7 mA.s  ?
+ *
+ * Le seuil du compteur triphase est donc cerne entre 10,9 et 12,1 mA.s.
+ * Si le legacy appaire, la cause est bien la charge de la trame et rien
+ * d'autre -- et il faudra choisir entre l'identification automatique du
+ * modele et SF11 sur ce type d'installation.
+ *
+ * Retro-compatible : un recepteur lit les 11 premiers octets et ignore la
+ * suite, donc passer a 0 ne demande aucune modification cote LiXee-Box.
+ * Seule consequence : plus de device_id ni de model, donc plus de
+ * selection automatique du template data/tp/<device_id>.json. */
+#define LORA_PAIR_REQUEST_HAS_EXT      0
 #define LORA_DEVICE_ID_ZLINKY_TIC      0x0051  /* device_id LiXee du ZLinky — template data/tp/0051.json */
 #define LORA_DEVICE_MODEL_ZLINKY_TIC   "ZLinky_TIC"  /* cle dans data/tp/0051.json cote LiXee-Box */
 #define LORA_DEVICE_MODEL_MAX_LEN      32   /* garde-fou de securite (permet des noms d'objets futurs plus longs) */
