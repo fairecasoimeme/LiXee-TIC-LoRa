@@ -175,6 +175,39 @@ PRIVATE uint8 u8ExtSlot = 0;
  * trame en echec n'est pas rejouee : elle reviendra par la table. */
 PRIVATE uint8 u8ExtBootSent = 0;
 
+/* Remontee sur changement.
+ *
+ * Les valeurs evenementielles portees par un EXTENDED (tarif en cours,
+ * preavis EJP, depassements, couleur du lendemain) attendraient sinon leur
+ * creneau dans la table : jusqu'a ~7 min 30 pour TARIFF_LABEL, ~15 min pour
+ * HISTO_ALERTS et TARIFF_OPTION. En Standard le registre STGE (ESSENTIAL,
+ * chaque cycle) couvre deja l'essentiel ; en Historique il n'existe pas.
+ *
+ * Les champs surveilles sont compares a chaque cycle, juste apres
+ * l'acquisition TIC. Un changement arme le bit du sous-type concerne dans
+ * u16ExtPending ; le prochain EXTENDED l'emet a la place du creneau prevu,
+ * qui est seulement retarde (ni la table ni le tour de demarrage n'avancent).
+ *
+ * Garde-fou : jamais deux EXTENDED prioritaires d'affilee. Pendant un
+ * depassement, ADIRn change a chaque trame TIC ; sans cette regle
+ * HISTO_ALERTS monopoliserait le canal et la table ne tournerait plus.
+ * Elle ralentit donc au pire d'un facteur 2.
+ *
+ * Une trame prioritaire n'est pas rejouee en cas d'echec TX : la valeur
+ * reviendra par son creneau normal. */
+#define LORA_TIC_EXT_BIT(sub)     ((uint16)(1U << (sub)))
+
+PRIVATE uint16 u16ExtPending = 0;
+PRIVATE bool_t bExtLastWasPriority = FALSE;
+
+/* Derniere valeur vue des champs surveilles */
+PRIVATE bool_t bExtWatchValid = FALSE;
+PRIVATE uint8  au8WatchTarifPeriod[LORA_TIC_TARIFF_LABEL_MAX_LEN];
+PRIVATE uint8  au8WatchDemain[LORA_TIC_DEMAIN_LEN];
+PRIVATE uint8  u8WatchPEJP;
+PRIVATE uint8  u8WatchPPOT;
+PRIVATE uint16 au16WatchADIR[3];
+
 
 /****************************************************************************/
 /***        Exported Variables                                            ***/
@@ -204,6 +237,8 @@ PRIVATE uint8 u8ComputeTariffCode(void);
 PRIVATE void vReconfigureLoRaForTx(void);
 PRIVATE bool_t bTransmitAndWait(uint8 *pu8Data, uint8 u8Len);
 PRIVATE void vWaitMs(uint32 u32Ms);
+PRIVATE void vExtWatchUpdate(void);
+PRIVATE uint8 u8ExtNextPending(void);
 
 /* Espacement entre l'ESSENTIAL et l'EXTENDED qui le suit (ms).
  *
@@ -327,6 +362,10 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
     WWDT_Refresh(WWDT);
 #endif
 
+    /* Remontee sur changement : arme u16ExtPending si une valeur
+     * evenementielle a bouge depuis le cycle precedent. */
+    vExtWatchUpdate();
+
     /* LED geree par app_blink_led / App_Linky (1s erreur, 3s OK) — pas de toggle TX */
 
     /* ===== 1) Toujours envoyer ESSENTIAL (17B) ===== */
@@ -377,7 +416,18 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
          * LORA_TIC_INTER_FRAME_GAP_MS. */
         vWaitMs(LORA_TIC_INTER_FRAME_GAP_MS);
 
-        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
+        /* Sous-type a emettre : celui du creneau, sauf si une valeur
+         * evenementielle attend (cf. u16ExtPending). */
+        uint8 u8Sub = u8ExtSubType;
+        bool_t bPriority = FALSE;
+
+        if (u16ExtPending != 0 && !bExtLastWasPriority)
+        {
+            u8Sub = u8ExtNextPending();
+            bPriority = (u8Sub != u8ExtSubType);
+        }
+
+        uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8Sub);
 
         /* Encrypt if paired */
         u8ExtLen = APP_u8LoraCryptEncrypt(au8TxPayload, u8ExtLen,
@@ -387,8 +437,9 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
 
         /* Hex dump */
         {
-            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s] TX [%d]: ",
-                        u8ExtSubType,
+            DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: [EXT sub=%d%s%s] TX [%d]: ",
+                        u8Sub,
+                        bPriority ? " PRIO" : "",
                         (u8ExtLen > LORA_TIC_DATA_EXTENDED_MAX_SIZE) ? "+ENC" : "",
                         u8ExtLen);
             int i;
@@ -403,28 +454,36 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
         {
             u32TxCount++;
             DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX #%lu OK (sub=%d seq=%u)\r\n",
-                        u32TxCount, u8ExtSubType, u8TxSequence - 1);
+                        u32TxCount, u8Sub, u8TxSequence - 1);
         }
         else
         {
             DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: EXT TX FAILED (sub=%d seq=%u)\r\n",
-                        u8ExtSubType, u8TxSequence - 1);
+                        u8Sub, u8TxSequence - 1);
         }
 
-        /* Sous-type suivant : fin du tour de demarrage, puis table ponderee */
-        if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
-        {
-            u8ExtBootSent++;
-        }
+        /* Ce sous-type vient de partir avec les valeurs courantes */
+        u16ExtPending &= (uint16)~LORA_TIC_EXT_BIT(u8Sub);
+        bExtLastWasPriority = bPriority;
 
-        if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
+        /* Sous-type suivant : fin du tour de demarrage, puis table ponderee.
+         * Une trame prioritaire ne consomme pas de creneau. */
+        if (!bPriority)
         {
-            u8ExtSubType = u8ExtBootSent;
-        }
-        else
-        {
-            u8ExtSubType = au8ExtSchedule[u8ExtSlot];
-            u8ExtSlot = (uint8)((u8ExtSlot + 1) % LORA_TIC_EXT_SCHEDULE_LEN);
+            if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
+            {
+                u8ExtBootSent++;
+            }
+
+            if (u8ExtBootSent < LORA_TIC_EXT_SUBTYPE_COUNT)
+            {
+                u8ExtSubType = u8ExtBootSent;
+            }
+            else
+            {
+                u8ExtSubType = au8ExtSchedule[u8ExtSlot];
+                u8ExtSlot = (uint8)((u8ExtSlot + 1) % LORA_TIC_EXT_SCHEDULE_LEN);
+            }
         }
     }
 
@@ -1589,6 +1648,96 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
 PUBLIC bool_t APP_bLoraTicTransmitRaw(uint8 *pu8Data, uint8 u8Len)
 {
     return bTransmitAndWait(pu8Data, u8Len);
+}
+
+/****************************************************************************
+ *
+ * NAME: vExtWatchUpdate
+ *
+ * DESCRIPTION:
+ * Compare les valeurs evenementielles a leur derniere valeur vue et arme
+ * u16ExtPending pour les sous-types dont le contenu a change.
+ *
+ *   TARIFF_LABEL  : LTARF (Standard) / PTEC (Historique)
+ *   HISTO_ALERTS  : PEJP, PPOT, ADIR1/2/3
+ *   TARIFF_OPTION : DEMAIN
+ *
+ * Le premier appel apres un reset ne fait que memoriser l'etat : le tour de
+ * demarrage emet de toute facon tous les sous-types.
+ *
+ ****************************************************************************/
+PRIVATE void vExtWatchUpdate(void)
+{
+    uint16 u16Changed = 0;
+
+    if (memcmp(au8WatchTarifPeriod,
+               sBaseDevice.sLinkyServerCluster.au8LinkyTarifPeriod,
+               sizeof(au8WatchTarifPeriod)) != 0)
+    {
+        memcpy(au8WatchTarifPeriod,
+               sBaseDevice.sLinkyServerCluster.au8LinkyTarifPeriod,
+               sizeof(au8WatchTarifPeriod));
+        u16Changed |= LORA_TIC_EXT_BIT(LORA_TIC_EXT_TARIFF_LABEL);
+    }
+
+    if (u8WatchPEJP != sBaseDevice.sLinkyServerCluster.au8LinkyPEJP ||
+        u8WatchPPOT != sBaseDevice.sLinkyServerCluster.au8LinkyPPOT ||
+        au16WatchADIR[0] != sBaseDevice.sLinkyServerCluster.au16LinkyADIR1 ||
+        au16WatchADIR[1] != sBaseDevice.sLinkyServerCluster.au16LinkyADIR2 ||
+        au16WatchADIR[2] != sBaseDevice.sLinkyServerCluster.au16LinkyADIR3)
+    {
+        u8WatchPEJP = sBaseDevice.sLinkyServerCluster.au8LinkyPEJP;
+        u8WatchPPOT = sBaseDevice.sLinkyServerCluster.au8LinkyPPOT;
+        au16WatchADIR[0] = sBaseDevice.sLinkyServerCluster.au16LinkyADIR1;
+        au16WatchADIR[1] = sBaseDevice.sLinkyServerCluster.au16LinkyADIR2;
+        au16WatchADIR[2] = sBaseDevice.sLinkyServerCluster.au16LinkyADIR3;
+        u16Changed |= LORA_TIC_EXT_BIT(LORA_TIC_EXT_HISTO_ALERTS);
+    }
+
+    if (memcmp(au8WatchDemain,
+               sBaseDevice.sLinkyServerCluster.au8LinkyDemain,
+               sizeof(au8WatchDemain)) != 0)
+    {
+        memcpy(au8WatchDemain,
+               sBaseDevice.sLinkyServerCluster.au8LinkyDemain,
+               sizeof(au8WatchDemain));
+        u16Changed |= LORA_TIC_EXT_BIT(LORA_TIC_EXT_TARIFF_OPTION);
+    }
+
+    if (!bExtWatchValid)
+    {
+        bExtWatchValid = TRUE;
+        return;
+    }
+
+    if (u16Changed != 0)
+    {
+        DBG_vPrintf(TRACE_LORA_TIC, "LORA_TIC: changement detecte, EXT prioritaire (mask=0x%04X)\r\n",
+                    u16Changed);
+        u16ExtPending |= u16Changed;
+    }
+}
+
+/****************************************************************************
+ *
+ * NAME: u8ExtNextPending
+ *
+ * DESCRIPTION:
+ * Sous-type en attente le plus urgent. A n'appeler que si u16ExtPending
+ * est non nul. Ordre : alertes, puis tarif en cours, puis lendemain.
+ *
+ ****************************************************************************/
+PRIVATE uint8 u8ExtNextPending(void)
+{
+    if (u16ExtPending & LORA_TIC_EXT_BIT(LORA_TIC_EXT_HISTO_ALERTS))
+    {
+        return LORA_TIC_EXT_HISTO_ALERTS;
+    }
+    if (u16ExtPending & LORA_TIC_EXT_BIT(LORA_TIC_EXT_TARIFF_LABEL))
+    {
+        return LORA_TIC_EXT_TARIFF_LABEL;
+    }
+    return LORA_TIC_EXT_TARIFF_OPTION;
 }
 
 /****************************************************************************

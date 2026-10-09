@@ -319,6 +319,24 @@ quasi-statiques, sans attendre leur créneau dans la table.
 | `0x0A` TARIFF_OPTION | 1 | ~15 min |
 | `0x0B` HISTO_ALERTS | 1 | ~15 min |
 
+**3. Remontée sur changement** — quand une valeur événementielle change,
+son sous-type passe en priorité au prochain EXTENDED (≤ ~37,5 s) au lieu
+d'attendre son créneau :
+
+| Valeur surveillée | Sous-type émis en priorité |
+|---|---|
+| PEJP, PPOT, ADIR1/2/3 (Historique) | `0x0B` HISTO_ALERTS |
+| LTARF (Standard) / PTEC (Historique) | `0x07` TARIFF_LABEL |
+| DEMAIN (Historique Tempo) | `0x0A` TARIFF_OPTION |
+
+Le créneau prévu est seulement retardé d'un EXTENDED. Il n'y a jamais deux
+trames prioritaires d'affilée, pour qu'une valeur qui change sans cesse
+(ADIR pendant un dépassement) ne bloque pas la table. Une trame prioritaire
+a le même format qu'une trame normale : rien ne la distingue côté récepteur.
+
+En Standard, les changements d'état remontent de toute façon en ~9 s par le
+registre STGE de l'ESSENTIAL.
+
 Le débit radio est inchangé (même nombre de trames) : seul l'ordre change.
 Le récepteur ne doit faire **aucune hypothèse sur l'ordre** d'arrivée — il
 identifie chaque trame par son octet de sous-type. Une donnée nécessaire plus
