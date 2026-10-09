@@ -100,27 +100,6 @@ PRIVATE uint8 au8TxPayload[LORA_TIC_MAX_PAYLOAD + LORA_CRYPT_MIC_SIZE];
 PRIVATE uint8 u8EssentialCounter = 0;
 PRIVATE uint8 u8ExtSubType = 0;
 
-/* ===== BUILD DE MESURE — commenter cette ligne pour revenir au normal =====
- *
- * Force le sous-type EXTENDED au lieu de faire tourner les 12, afin de
- * mesurer le PDR par classe de symboles dans un seul run.
- *
- * A SF11/BW406 l'airtime est quantifie par paliers de 5 symboles, et le
- * budget d'alimentation TIC limite la charge par emission :
- *
- *   ESSENTIAL      19 o -> 28 symboles -> 11,0 mA.s   (~50 % de PDR observe)
- *   EXT COMPLEMENT 11 o -> 18 symboles ->  8,7 mA.s   (= charge du
- *                                          PAIR_REQUEST qui passe du 1er coup)
- *
- * En forcant COMPLEMENT, un run de 10 min donne ~120 ESSENTIAL (toutes les
- * 5 s) et ~30 EXTENDED (toutes les 20 s), soit deux classes bien
- * echantillonnees dans des conditions radio identiques.
- *
- * Lecture : si COMPLEMENT arrive a ~100 % pendant que l'ESSENTIAL plafonne
- * a ~50 %, le seuil est encadre entre 8,7 et 11,0 mA.s et le modele est
- * confirme. Si les DEUX plafonnent au meme taux, le modele est FAUX et les
- * pertes viennent d'ailleurs. */
-#define LORA_TIC_EXT_SUBTYPE_FORCE   LORA_TIC_EXT_COMPLEMENT
 
 /****************************************************************************/
 /***        Exported Variables                                            ***/
@@ -323,10 +302,6 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
          * LORA_TIC_INTER_FRAME_GAP_MS. */
         vWaitMs(LORA_TIC_INTER_FRAME_GAP_MS);
 
-#ifdef LORA_TIC_EXT_SUBTYPE_FORCE
-        u8ExtSubType = LORA_TIC_EXT_SUBTYPE_FORCE;   /* build de mesure */
-#endif
-
         uint8 u8ExtLen = u8BuildExtendedPacket(au8TxPayload, u8ExtSubType);
 
         /* Encrypt if paired */
@@ -361,9 +336,7 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
                         u8ExtSubType, u8TxSequence - 1);
         }
 
-#ifndef LORA_TIC_EXT_SUBTYPE_FORCE
         u8ExtSubType = (u8ExtSubType + 1) % LORA_TIC_EXT_SUBTYPE_COUNT;
-#endif
     }
 
     /* LED geree par app_blink_led — pas de toggle TX */

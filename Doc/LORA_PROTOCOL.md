@@ -15,13 +15,32 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | Spreading Factor | **negocie a l'appairage** (7..12) — assigner **SF10**, cf. §4.2 |
 | Bandwidth | **BW 406 kHz** |
 | Coding Rate | **4/5** |
-| Preamble | 16 symboles (encodé `0x18`) |
+| Preamble | **8 symboles** (encodé `0x08`) — ⚠️ le récepteur doit utiliser la même valeur |
 | Header | Explicit |
 | CRC | ON |
 | IQ | Normal |
 | Sync Word | registre `0x0944` = `{0x14, 0x24}` (équivalent RadioLib `setSyncWord(0x12)`) |
 | TX Power | **+10 dBm** — limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM |
 | Regulator | LDO |
+
+> ⚠️ **Le préambule est passé de 16 à 8 symboles** — le `preambleLength` du
+> récepteur doit être **≤ 8**, sinon il attend des symboles qui n'arrivent
+> jamais et ne détecte **plus aucune trame** (panne nette, pas dégradation).
+>
+> **Pourquoi** : à SF11/BW406 le préambule coûte 102 ms à 16 symboles contre
+> 62 ms à 8, soit **1,8 mA·s économisés sur chaque trame**. Le budget
+> d'alimentation de la prise TIC limite la charge par émission, et certains
+> compteurs sont juste au-dessus du seuil. Mesures terrain sur un Linky
+> triphasé (SF11, +10 dBm) :
+>
+> | Préambule | Charge ESSENTIAL | Trames émises avec succès |
+> |---|---|---|
+> | 16 symboles | 11,0 mA·s | **36 %** (9/25) |
+> | **8 symboles** | **9,1 mA·s** | **100 %** (91/91, 0 perte au récepteur) |
+>
+> La sensibilité ne dépend que du SF/BW/CR : 8 symboles ne coûte pas de
+> portée, seulement un peu de marge de détection à très faible SNR. LoRaWAN
+> utilise 8 symboles pour tous ses uplinks.
 
 ### Plan de fréquences (8 canaux)
 
