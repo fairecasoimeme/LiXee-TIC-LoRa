@@ -22,6 +22,7 @@
 #include "app_lora_tic.h"
 #include "app_lora_pair.h"
 #include "app_lora_crypt.h"
+#include "app_version.h"
 
 #include "app_common.h"
 #include "App_Linky.h"
@@ -288,6 +289,11 @@ PRIVATE int iBuildPollValue(uint16 u16Cluster, uint16 u16Attr,
             POLL_U16(LORA_DEVICE_ID_ZLINKY_TIC);
         case LORA_ATTR_BASIC_MODEL:
             POLL_STR((const uint8 *)szModel, (uint8)(sizeof(szModel) - 1));
+        case LORA_ATTR_BASIC_FW_VERSION:
+            POLL_U16(APP_VERSION_U16);
+        case LORA_ATTR_BASIC_SW_BUILD_ID:
+            /* u8PutAscii s'arrete au nul terminal et borne a LORA_POLL_VALUE_MAX */
+            POLL_STR((const uint8 *)APP_pcVersionString(), LORA_POLL_VALUE_MAX);
         default:
             return -1;
         }

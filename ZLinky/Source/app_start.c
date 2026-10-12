@@ -51,6 +51,7 @@
 #include "sx1280_config.h"
 #include "app_lora_tic.h"
 #include "app_lora_channels.h"
+#include "app_version.h"
 
 #ifdef APP_LOW_POWER_API
 #include "PWR_interface.h"
@@ -121,6 +122,8 @@ extern void OSA_TimeInit(void);
 
 static void ConfigureLoRa(void)
 {
+	PRINTF("\r\n=== ZLinky LoRa - firmware %s (0x%04X) ===\r\n",
+	       APP_pcVersionString(), APP_VERSION_U16);
 	PRINTF("=== Configuration LoRa (module NiceRF LORA1280-TCXO) ===\r\n");
 
 	    /*

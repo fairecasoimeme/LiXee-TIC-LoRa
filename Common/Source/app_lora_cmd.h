@@ -70,6 +70,14 @@
 #define LORA_CLUSTER_BASIC          0x0000  /* identification de l'objet */
 #define LORA_ATTR_BASIC_MODEL       0x0005  /* ModelIdentifier (ZCL standard) */
 #define LORA_ATTR_BASIC_DEVICE_ID   0xFF00  /* device_id (specifique LiXee) */
+/* Version du firmware (cf. app_version.h). Deux formes :
+ *   FW_VERSION  : uint16 0xMMmp, comparable numeriquement — c'est la valeur
+ *                 a confronter au champ version d'OTA_START pour decider
+ *                 d'une mise a jour ;
+ *   SW_BUILD_ID : chaine "1.0.0+<commit git>", pour l'affichage et le
+ *                 support (identifie le build exact). */
+#define LORA_ATTR_BASIC_FW_VERSION  0xFF01  /* version firmware uint16 (specifique LiXee) */
+#define LORA_ATTR_BASIC_SW_BUILD_ID 0x4000  /* SWBuildID (ZCL standard) */
 
 #define LORA_CLUSTER_LIXEE          0xFF66  /* cluster custom LiXee (TIC) */
 #define LORA_CLUSTER_METERING       0x0702  /* Simple Metering (index energie) */

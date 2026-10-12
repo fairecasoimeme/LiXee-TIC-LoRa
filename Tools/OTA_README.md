@@ -40,7 +40,7 @@ Le receiver Arduino doit être en mode "OTA gateway" (à implémenter dans son f
 ### Étape 3 : lancer l'OTA
 
 ```bash
-python ota_send.py firmware.bin --port COM5 --target-mac 00158D0005D2ABE1 --new-version 0x0102
+python ota_send.py firmware.bin --port COM5 --target-mac 00158D0005D2ABE1 --new-version 0x0100
 ```
 
 Sortie attendue :
@@ -51,7 +51,7 @@ ZLinky OTA sender
 Firmware     : ZLinky_GpProxy.bin
 Size         : 196880 bytes
 CRC32        : 0x7D6EFAA6
-Version      : 0x0102
+Version      : 0x0100
 Block size   : 64 bytes
 Total blocks : 3077
 Target MAC   : 00158D0005D2ABE1

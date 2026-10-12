@@ -371,6 +371,7 @@ APPSRC += app_lora_crypt.c
 APPSRC += app_lora_channels.c
 APPSRC += app_lora_ota.c
 APPSRC += app_lora_cmd.c
+APPSRC += app_version.c
 
 # LoRa OTA : OtaSupport NXP pour flash dual-bank (sans Zigbee OTA cluster).
 LORA_OTA ?= 1
@@ -581,6 +582,28 @@ $(APP_OBJ_DIR)/app_main.o: app_main.c
 	@echo $@ $< >> $(APP_OUT_DIR)/$(TARGET_FULL).log 
 	@echo
 	
+# Version firmware : app_version.c embarque le commit git des sources.
+# Il est recompile a chaque build (FORCE) pour ne jamais porter un commit
+# perime. "-dirty" = modifications suivies non commitees ; "nogit" = git
+# indisponible (build depuis l'IDE sans git dans le PATH).
+APP_GIT_HASH := $(strip $(shell git -C $(APP_BASE) rev-parse --short HEAD 2>/dev/null))
+ifeq ($(APP_GIT_HASH),)
+APP_GIT_HASH := nogit
+else
+ifneq ($(strip $(shell git -C $(APP_BASE) status --porcelain --untracked-files=no 2>/dev/null)),)
+APP_GIT_HASH := $(APP_GIT_HASH)-dirty
+endif
+endif
+
+$(APP_OBJ_DIR)/app_version.o: app_version.c FORCE
+	$(info Compiling $< into $@ (build $(APP_GIT_HASH))...)
+	$(TOOLCHAIN_PATH)/$(CC) -c -o $@ $(CFLAGS) -DAPP_BUILD_GIT='"$(APP_GIT_HASH)"' $(INCFLAGS) $< -MD -MF $(APP_OBJ_DIR)/app_version.d -MP
+	@echo $@ $< >> $(APP_OUT_DIR)/$(TARGET_FULL).log 
+	@echo
+
+.PHONY: FORCE
+FORCE:
+
 $(APP_OBJ_DIR)/%.o: %.c 
 	$(info Compiling $< into $@...)
 	$(TOOLCHAIN_PATH)/$(CC) -c -o $@ $(CFLAGS) $(INCFLAGS) $< -MD -MF $(APP_OBJ_DIR)/$*.d -MP

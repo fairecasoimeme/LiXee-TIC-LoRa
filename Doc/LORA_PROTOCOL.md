@@ -857,6 +857,24 @@ qui décrit l'objet lui-même et non le compteur.
 |---|---|---|---|
 | `0xFF00` | **device_id** | uint16 | `0x0051` |
 | `0x0005` | **ModelIdentifier** | char string | `"ZLinky_TIC"` |
+| `0xFF01` | **version firmware** | uint16 | `0x0100` pour 1.0.0 |
+| `0x4000` | **SWBuildID** | char string | `"1.0.0+abc1234"` |
+
+> **Version du firmware** : numérotée `MAJEUR.MINEUR.CORRECTIF`.
+>
+> - `0xFF01` la donne sur 16 bits au format `0xMMmp` (MM = majeur, m = mineur,
+>   p = correctif) : 1.2.3 → `0x0123`. Les valeurs se comparent numériquement,
+>   et c'est le même encodage que le champ version d'OTA_START (§10). Le
+>   récepteur lit cet attribut pour décider d'une mise à jour, puis le relit
+>   après l'OTA pour vérifier qu'elle a pris.
+> - `0x4000` la donne en clair, suivie du commit git du build
+>   (`+abc1234`). Le suffixe `-dirty` signale un build de développement fait
+>   avec des sources non commitées ; `nogit` remplace le commit si git était
+>   absent à la compilation. À afficher tel quel et à joindre aux demandes de
+>   support.
+> - Un changement de **majeur** signale une rupture de compatibilité radio.
+>
+> Un firmware antérieur à 1.0.0 répond `UNKNOWN_ATTR` à ces deux attributs.
 
 > **À quoi ça sert** : après l'appairage, le récepteur interroge d'abord
 > `0xFF00` pour connaître le `device_id` — qui nomme le fichier
@@ -997,7 +1015,7 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 |---|---|---|
 | 0 | 1 | `0x16` |
 | 1 | 1 | seq |
-| 2-3 | 2 | version du nouveau firmware (uint16 BE) |
+| 2-3 | 2 | version du nouveau firmware (uint16 BE, format `0xMMmp` — cf. §8, attribut `0xFF01`) |
 | 4-7 | 4 | taille du firmware en octets (uint32 BE) |
 | 8-11 | 4 | CRC32 du firmware complet (uint32 BE) |
 | 12-13 | 2 | nombre total de blocs (uint16 BE) |
