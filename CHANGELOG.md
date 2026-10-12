@@ -21,7 +21,8 @@ Première version numérotée. État du firmware pour le premier lot de ZLinky L
 - Appairage par PAIR_REQUEST de 11 octets ; `device_id` et `model` se lisent
   ensuite par POLL (cluster Basic `0x0000`).
 - Chiffrement AES-128-CTR et MIC de 2 octets sur toutes les trames appairées.
-- Mise à jour du firmware par radio (OTA).
+- Mise à jour du firmware par radio (OTA), avec acquittement par fenêtre de
+  blocs pour tenir dans le budget d'alimentation TIC.
 
 ### Données
 - ESSENTIAL à chaque cycle : puissances apparentes, STGE, ADPS, mode.

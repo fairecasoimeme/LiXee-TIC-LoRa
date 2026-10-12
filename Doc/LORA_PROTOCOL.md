@@ -1003,13 +1003,75 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 
 | Type | Nom | Sens | Taille (clair) |
 |---|---|---|---|
-| `0x06` | OTA_START | box → device | 15 B |
+| `0x06` | OTA_START | box → device | 15 B, ou 16 B avec la fenêtre |
 | `0x07` | OTA_BLOCK | box → device | 68 B (4 + 64 de données) |
 | `0x08` | OTA_END | box → device | 7 B |
 | `0x09` | OTA_ACK | device → box | 7 B |
 | `0x0A` | OTA_STATUS | device → box | 8 B |
 
-### OTA_START (15 octets)
+### Déroulement
+
+Le ZLinky doit être en **mode OTA recovery** (bouton maintenu à la mise sous
+tension). Il écoute alors en continu, pendant 5 minutes, sur le canal et le SF
+opérationnels, et **n'émet rien de lui-même** : c'est le récepteur qui ouvre
+l'échange.
+
+1. Le récepteur émet `OTA_START` et le répète jusqu'à recevoir un `OTA_ACK`.
+2. Le récepteur envoie les `OTA_BLOCK` dans l'ordre. Le ZLinky acquitte par
+   **fenêtre** de W blocs (voir ci-dessous).
+3. Le récepteur émet `OTA_END`. Le ZLinky vérifie l'image, acquitte, puis
+   redémarre sur le nouveau firmware.
+
+Après le redémarrage, le récepteur peut relire la version par POLL (§8,
+attribut `0xFF01`) pour vérifier que la mise à jour a pris.
+
+### Acquittement par fenêtre
+
+Acquitter chaque bloc obligerait le ZLinky à émettre toutes les ~0,7 s, ce que
+l'alimentation TIC ne supporte pas. Le récepteur demande donc une fenêtre de
+W blocs dans `OTA_START` (W = 16 recommandé) :
+
+- le ZLinky **n'émet que sur un bloc de fin de fenêtre** : un bloc dont l'index
+  vérifie `(index + 1) % W == 0`, ou le dernier bloc de l'image ;
+- son `OTA_ACK` porte alors l'index du **prochain bloc attendu**, statut `OK` ;
+- un bloc hors séquence (trou ou doublon) est **ignoré en silence**.
+
+Algorithme côté récepteur, pour une fenêtre couvrant les blocs `a` à `b`
+(`b` = fin de fenêtre) :
+
+1. Envoyer les blocs `a`..`b` à la suite, espacés d'au moins **100 ms**.
+2. Écouter l'`OTA_ACK` pendant **2 s**.
+3. Lire `next` = index porté par l'ACK :
+   - `next == b + 1` : fenêtre reçue, passer à la suivante ;
+   - `next <= b` : un bloc a été perdu, reprendre l'étape 1 avec `a = next`
+     (même `b`) ;
+   - `next == total` : tous les blocs sont reçus, envoyer `OTA_END`.
+4. Pas d'ACK au bout de 2 s : renvoyer **uniquement le bloc `b`**, qui
+   sollicite un nouvel ACK, puis reprendre à l'étape 2. Ne pas renvoyer toute
+   la fenêtre : le ZLinky a peut-être tout reçu et c'est l'ACK qui s'est perdu.
+5. Abandonner après une dizaine d'échecs consécutifs sur la même fenêtre.
+
+Le récepteur ne doit **jamais émettre pendant qu'il attend un ACK** : la
+liaison est à l'alternat, il brouillerait la réponse.
+
+**Durées à SF11 / BW 406 kHz :**
+
+| Trame | Octets sur l'air (avec MIC) | Durée |
+|---|---|---|
+| OTA_START | 18 | ~205 ms |
+| OTA_BLOCK | 70 | ~430 ms |
+| OTA_ACK | 9 | ~150 ms |
+
+Avec W = 16, une fenêtre dure environ 8,5 s et le ZLinky n'émet qu'une fois
+par fenêtre, comme en fonctionnement normal. Un firmware de 200 ko
+(~3150 blocs) se transfère en **environ 30 minutes** sans perte.
+
+**Compatibilité :** un ZLinky dont le firmware ignore la fenêtre renvoie `0`
+dans l'octet 5 de l'`OTA_ACK` de `OTA_START` et acquitte chaque bloc. Le
+récepteur doit alors travailler bloc par bloc (envoyer un bloc, attendre son
+ACK, qui porte l'index du bloc acquitté et non le suivant).
+
+### OTA_START (15 ou 16 octets)
 
 | Offset | Taille | Champ |
 |---|---|---|
@@ -1020,6 +1082,10 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 | 8-11 | 4 | CRC32 du firmware complet (uint32 BE) |
 | 12-13 | 2 | nombre total de blocs (uint16 BE) |
 | 14 | 1 | taille d'un bloc (toujours 64) |
+| 15 | 1 | **optionnel** — fenêtre d'acquittement W demandée (2 à 32 ; 16 recommandé). Absent, `0` ou `1` : un ACK par bloc |
+
+Le ZLinky borne W à 32 et renvoie la valeur retenue dans l'`OTA_ACK` : c'est
+**cette valeur** que le récepteur doit utiliser.
 
 ### OTA_BLOCK (68 octets)
 
@@ -1030,9 +1096,17 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 | 2-3 | 2 | index du bloc (uint16 BE) |
 | 4-67 | 64 | données (dernier bloc padé à `0xFF`) |
 
-Les blocs doivent arriver **séquentiellement**. Si un bloc hors-séquence arrive,
-le device répond `OTA_ACK` avec `status = OUT_OF_RANGE` et `block_idx` = le bloc
-qu'il attend → la gateway doit reprendre à cet index.
+Les blocs doivent arriver **séquentiellement**.
+
+- **Avec fenêtre (W ≥ 2)** : un bloc hors séquence est ignoré en silence ; le
+  récepteur l'apprend par l'ACK de fin de fenêtre (voir plus haut).
+- **Sans fenêtre** : le device répond immédiatement `OTA_ACK` avec
+  `status = OUT_OF_RANGE` et `block_idx` = le bloc qu'il attend → la gateway
+  doit reprendre à cet index.
+
+Si le ZLinky n'est pas en réception (pas d'`OTA_START` accepté, ou redémarrage
+en cours de transfert), il répond `NOT_STARTED` au premier bloc reçu puis une
+fois tous les 32 blocs : le récepteur doit alors reprendre à `OTA_START`.
 
 ### OTA_END (7 octets)
 
@@ -1049,9 +1123,10 @@ qu'il attend → la gateway doit reprendre à cet index.
 |---|---|---|
 | 0 | 1 | `0x19` |
 | 1 | 1 | seq (celui du paquet acquitté) |
-| 2-3 | 2 | index du bloc (uint16 BE) — `0xFFFF` pour START/END |
+| 2-3 | 2 | index (uint16 BE) — `0xFFFF` pour START/END ; avec fenêtre : **prochain bloc attendu** ; sans fenêtre : bloc acquitté |
 | 4 | 1 | status (voir table) |
-| 5-6 | 2 | réservé |
+| 5 | 1 | fenêtre W retenue (`0` = firmware sans fenêtre ou pas d'OTA en cours) |
+| 6 | 1 | réservé |
 
 **Codes status :**
 
@@ -1064,6 +1139,7 @@ qu'il attend → la gateway doit reprendre à cet index.
 | `0x04` | OUT_OF_RANGE |
 | `0x05` | FW_TOO_BIG |
 | `0x06` | FW_BAD_CRC |
+| `0x07` | NOT_STARTED |
 
 ### OTA_STATUS (8 octets)
 

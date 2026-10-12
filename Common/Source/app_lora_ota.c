@@ -155,9 +155,17 @@ PUBLIC bool_t APP_bLoraOtaOnStart(uint8 *buf, uint16 len)
     uint16 totalBlocks  = ((uint16)buf[12] << 8) | buf[13];
     uint16 blockSize    = buf[14];
 
+    /* Fenetre d'acquittement : 16e octet optionnel (cf. LORA_OTA_WINDOW_MAX) */
+    uint8 u8Window = 1;
+    if (len >= LORA_OTA_START_EXT_SIZE) {
+        u8Window = buf[15];
+        if (u8Window < 1)                   u8Window = 1;
+        if (u8Window > LORA_OTA_WINDOW_MAX) u8Window = LORA_OTA_WINDOW_MAX;
+    }
+
     DBG_vPrintf(TRACE_LORA_OTA,
-        "LORA_OTA: START seq=%d ver=0x%04X size=%lu crc=0x%08lX blocks=%d block_size=%d\r\n",
-        seq, newVer, fwSize, fwCrc32, totalBlocks, blockSize);
+        "LORA_OTA: START seq=%d ver=0x%04X size=%lu crc=0x%08lX blocks=%d block_size=%d window=%d\r\n",
+        seq, newVer, fwSize, fwCrc32, totalBlocks, blockSize, u8Window);
 
     /* Validation de base */
     if (totalBlocks > LORA_OTA_MAX_BLOCKS) {
@@ -198,19 +206,30 @@ PUBLIC bool_t APP_bLoraOtaOnStart(uint8 *buf, uint16 len)
     sOta.u16ExpectedBlock = 0;  /* On attend le block 0 en premier */
     sOta.u32LastBlockTime = 0;
     sOta.u8LastSeq        = seq;
+    sOta.u8Window         = u8Window;
 
+    /* L'ACK renvoie la fenetre retenue dans son octet [5] */
     APP_vLoraOtaSendAck(0xFFFF, LORA_OTA_STATUS_OK);
-    DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: state=RECEIVING, expecting blocks 0..%d sequential\r\n",
-                totalBlocks - 1);
+    DBG_vPrintf(TRACE_LORA_OTA,
+                "LORA_OTA: state=RECEIVING, expecting blocks 0..%d sequential, 1 ACK / %d block(s)\r\n",
+                totalBlocks - 1, u8Window);
     return TRUE;
 }
 
 PUBLIC bool_t APP_bLoraOtaOnBlock(uint8 *buf, uint16 len)
 {
     if (sOta.state != OTA_STATE_RECEIVING) {
+        /* Le recepteur peut envoyer toute une fenetre sans savoir que nous ne
+         * sommes pas (ou plus) en reception : ne pas repondre a chaque bloc,
+         * ce qui viderait l'alimentation TIC. Un NOT_STARTED au premier bloc
+         * recu, puis un tous les LORA_OTA_WINDOW_MAX. */
+        static uint8 u8NotStartedCount = 0;
         DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: BLOCK received but state=%d, ignoring\r\n",
                     sOta.state);
-        APP_vLoraOtaSendAck(0xFFFF, LORA_OTA_STATUS_NOT_STARTED);
+        if ((u8NotStartedCount % LORA_OTA_WINDOW_MAX) == 0) {
+            APP_vLoraOtaSendAck(0xFFFF, LORA_OTA_STATUS_NOT_STARTED);
+        }
+        u8NotStartedCount++;
         return FALSE;
     }
     if (len < LORA_OTA_BLOCK_HDR_SIZE) {
@@ -225,6 +244,23 @@ PUBLIC bool_t APP_bLoraOtaOnBlock(uint8 *buf, uint16 len)
         DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: block_idx %d out of range (max %d)\r\n",
                     blockIdx, sOta.u16TotalBlocks);
         APP_vLoraOtaSendAck(blockIdx, LORA_OTA_STATUS_OUT_OF_RANGE);
+        return FALSE;
+    }
+
+    /* Mode fenetre : on n'emet que sur un bloc de fin de fenetre, et l'ACK
+     * porte alors le prochain bloc attendu (cf. LORA_OTA_WINDOW_MAX). */
+    bool_t bWindowed  = (sOta.u8Window > 1);
+    bool_t bWindowEnd = ((((uint32)blockIdx + 1) % sOta.u8Window) == 0) ||
+                        (blockIdx == (uint16)(sOta.u16TotalBlocks - 1));
+
+    if (bWindowed && blockIdx != sOta.u16ExpectedBlock) {
+        /* Bloc perdu en amont (trou) ou deja recu (doublon) : ignore en
+         * silence. Le recepteur l'apprend a la fin de la fenetre. */
+        DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: block %d ignored, expected %d\r\n",
+                    blockIdx, sOta.u16ExpectedBlock);
+        if (bWindowEnd) {
+            APP_vLoraOtaSendAck(sOta.u16ExpectedBlock, LORA_OTA_STATUS_OK);
+        }
         return FALSE;
     }
 
@@ -283,7 +319,13 @@ PUBLIC bool_t APP_bLoraOtaOnBlock(uint8 *buf, uint16 len)
                     pct, sOta.u16BlocksReceived, sOta.u16TotalBlocks);
     }
 
-    APP_vLoraOtaSendAck(blockIdx, LORA_OTA_STATUS_OK);
+    if (!bWindowed) {
+        /* Un ACK par bloc, portant l'index du bloc acquitte */
+        APP_vLoraOtaSendAck(blockIdx, LORA_OTA_STATUS_OK);
+    } else if (bWindowEnd) {
+        /* Un ACK par fenetre, portant le prochain bloc attendu */
+        APP_vLoraOtaSendAck(sOta.u16ExpectedBlock, LORA_OTA_STATUS_OK);
+    }
     return TRUE;
 }
 
@@ -363,7 +405,7 @@ PUBLIC void APP_vLoraOtaSendAck(uint16 u16BlockIdx, uint8 u8Status)
     au8Pkt[2] = (u16BlockIdx >> 8) & 0xFF;
     au8Pkt[3] = u16BlockIdx & 0xFF;
     au8Pkt[4] = u8Status;
-    au8Pkt[5] = 0x00;  /* reserved */
+    au8Pkt[5] = sOta.u8Window;  /* fenetre retenue (0 = pas d'OTA en cours) */
     au8Pkt[6] = 0x00;  /* reserved */
 
     /* Encrypt + add MIC */

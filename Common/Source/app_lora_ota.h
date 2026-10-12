@@ -60,8 +60,31 @@
 #define LORA_OTA_BLOCK_HDR_SIZE    4   /* type+seq+block_idx(2) */
 #define LORA_OTA_BLOCK_FULL_SIZE   (LORA_OTA_BLOCK_HDR_SIZE + LORA_OTA_BLOCK_SIZE)
 #define LORA_OTA_END_SIZE          7   /* type+seq+full_crc32(4)+reserved(1) */
-#define LORA_OTA_ACK_SIZE          7   /* type+seq+block_idx(2)+status(1)+reserved(2) */
+#define LORA_OTA_ACK_SIZE          7   /* type+seq+block_idx(2)+status(1)+window(1)+reserved(1) */
 #define LORA_OTA_STATUS_SIZE       8   /* type+seq+state(1)+blocks_recv(2)+last_block(2) */
+
+/* Acquittement par groupe (fenetre).
+ *
+ * Acquitter chaque bloc impose au ZLinky une emission toutes les ~0,7 s,
+ * soit dix fois plus d'energie emise par seconde qu'en fonctionnement normal :
+ * l'alimentation TIC ne suit pas. Avec une fenetre de W blocs, le ZLinky ne
+ * fait qu'ecouter pendant W blocs et n'emet qu'un seul OTA_ACK a la fin, ce
+ * qui le ramene a une emission toutes les ~8 s pour W = 16.
+ *
+ * La fenetre est demandee par le recepteur dans un 16e octet optionnel
+ * d'OTA_START. Le ZLinky la borne a LORA_OTA_WINDOW_MAX et renvoie la valeur
+ * retenue dans l'octet [5] de chaque OTA_ACK. Sans ce 16e octet (ou avec la
+ * valeur 0 ou 1), la fenetre vaut 1 : un ACK par bloc, comportement d'origine.
+ *
+ * En mode fenetre (W >= 2) :
+ *   - le ZLinky n'emet QUE sur un bloc de fin de fenetre, c.-a-d. un bloc dont
+ *     l'index verifie (index + 1) % W == 0, ou le dernier bloc de l'image ;
+ *   - l'OTA_ACK porte alors l'index du PROCHAIN bloc attendu (acquittement
+ *     cumulatif), avec le statut OK ;
+ *   - un bloc hors sequence est ignore en silence : le recepteur l'apprend a
+ *     la fin de la fenetre et reprend a l'index indique. */
+#define LORA_OTA_START_EXT_SIZE    16  /* OTA_START + window(1) */
+#define LORA_OTA_WINDOW_MAX        32
 
 /* Timeout sur reception block (si pas de block recu pendant N ms, abort) */
 #define LORA_OTA_BLOCK_TIMEOUT_MS  10000   /* 10 sec */
@@ -95,6 +118,7 @@ typedef struct {
     uint32  u32LastBlockTime;   /* timestamp dernier block recu (timeout detection) */
     uint8   au8BlockBitmap[LORA_OTA_BITMAP_SIZE];
     uint8   u8LastSeq;
+    uint8   u8Window;           /* Blocs par acquittement (1 = un ACK par bloc) */
 } tsOtaContext_t;
 
 /****************************************************************************/

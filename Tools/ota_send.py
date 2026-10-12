@@ -251,7 +251,7 @@ def main():
     print(f"Port         : {args.port} @ {args.baud}")
 
     # Estimation duree
-    avg_block_time_ms = 250  # SF11 + ACK + delay
+    avg_block_time_ms = 700  # SF11 : bloc ~430 ms + ACK ~150 ms + retournements
     total_min = (total_blocks * avg_block_time_ms) / 60000
     print(f"Estimated transfer time : {total_min:.1f} min @ SF11 (250 ms/block)")
     print("=" * 60)

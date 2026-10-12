@@ -2,6 +2,15 @@
 
 Mise à jour firmware over-the-air via LoRa du ZLinky depuis ta Lixée-box.
 
+> **À lire d'abord** : ce guide décrit la chaîne PC + `ota_send.py` + récepteur
+> Arduino en « mode passerelle ». Le script acquitte **chaque bloc**, ce qui
+> impose au ZLinky une émission toutes les ~0,7 s : à réserver à un ZLinky
+> alimenté par une alimentation de laboratoire, **pas par la TIC**. Compter
+> alors ~40 minutes pour 200 ko à SF11.
+>
+> Pour un ZLinky alimenté par le compteur, le récepteur doit utiliser
+> l'**acquittement par fenêtre** décrit dans `Doc/LORA_PROTOCOL.md` §10.
+
 ## Architecture
 
 ```
