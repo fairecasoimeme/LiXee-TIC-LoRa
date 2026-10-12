@@ -34,6 +34,10 @@ jmp_buf *exception_buf;
 #include "fsl_gpio.h"
 #include "OtaSupport.h"
 #include "fsl_reset.h"
+#ifdef WATCHDOG_ALLOWED
+#include "fsl_wwdt.h"
+extern uint8_t wdt_update_count;
+#endif
 
 /****************************************************************************/
 /***        Macro Definitions                                             ***/
@@ -54,6 +58,8 @@ PRIVATE void vBitmapSet(uint16 idx);
 PRIVATE bool_t bBitmapIsSet(uint16 idx);
 PRIVATE void vBitmapClear(void);
 PRIVATE bool_t bIsBitmapComplete(void);
+PRIVATE void vRestoreRxModeForOta(void);
+PRIVATE void vOtaKickWatchdog(void);
 
 /****************************************************************************/
 /***        Public Functions                                              ***/
@@ -84,14 +90,15 @@ PUBLIC void APP_vLoraOtaEnterListen(void)
     sOta.state = OTA_STATE_LISTENING;
     sOta.u32LastBlockTime = 0;  /* TODO : utiliser un vrai millis() */
 
-    /* Configure SX1280 in continuous RX */
-    SX1280_SetStandby(SX1280_STANDBY_RC);
-    SX1280_HAL_WaitOnBusy();
-    SX1280_SetDioIrqParams(
-        SX1280_IRQ_RX_DONE | SX1280_IRQ_CRC_ERROR,
-        SX1280_IRQ_RX_DONE | SX1280_IRQ_CRC_ERROR);
-    /* SetRx count=0xFFFF = mode RX continu (no timeout) sur SX1280 */
-    SX1280_SetRx(0xFFFF);
+    /* Radio sur le canal ET le SF operationnels negocies a l'appairage.
+     * Au boot, APP_vLoraPairInit ne repositionne que le canal : sans cette
+     * reconfiguration, un op_SF different du SF de rendez-vous laisserait
+     * le ZLinky ecouter au mauvais SF. */
+    APP_vLoRaTicReconfigureRadio(APP_u8LoraPairGetOpChannel(),
+                                 APP_u8LoraPairGetSF());
+
+    /* RX continu : payloadLength max, IRQ RX_DONE + CRC_ERROR, IRQ purgees */
+    vRestoreRxModeForOta();
 }
 
 PUBLIC void APP_vLoraOtaExitListen(void)
@@ -166,7 +173,10 @@ PUBLIC bool_t APP_bLoraOtaOnStart(uint8 *buf, uint16 len)
     }
 
     /* OtaSupport NXP : start image (allocates and erases slot B) */
+    /* L'effacement du slot peut durer plusieurs secondes */
+    vOtaKickWatchdog();
     otaResult_t otaRes = OTA_StartImage(fwSize);
+    vOtaKickWatchdog();
     if (otaRes != gOtaSuccess_c) {
         DBG_vPrintf(TRACE_LORA_OTA,
             "LORA_OTA: OTA_StartImage failed: %d (size=%lu)\r\n",
@@ -553,6 +563,12 @@ PUBLIC void APP_vLoraOtaRunListenLoop(void)
      * Sinon : timeout 5 minutes ou power-cycle. */
     uint32 u32IterCounter = 0;
     while (1) {
+        /* Sans cela le watchdog (1 s) redemarre le ZLinky au bout de ~9 s
+         * d'ecoute, et le boot qui suit un reset watchdog reste bloque
+         * dans sa boucle de clignotement : l'OTA ne pouvait jamais
+         * commencer. */
+        vOtaKickWatchdog();
+
         APP_vLoraOtaTick();
 
         /* Check timeout 5 min : @12 MHz CPU, 1ms ≈ 12000 cycles
@@ -571,6 +587,16 @@ PUBLIC void APP_vLoraOtaRunListenLoop(void)
 /****************************************************************************/
 /***        Local Functions (bitmap helpers)                              ***/
 /****************************************************************************/
+
+/* Rafraichit le watchdog et remet a zero le compteur d'avertissements de
+ * son interruption (qui ne nourrit le watchdog que 8 fois de suite). */
+PRIVATE void vOtaKickWatchdog(void)
+{
+#ifdef WATCHDOG_ALLOWED
+    WWDT_Refresh(WWDT);
+    wdt_update_count = 0;
+#endif
+}
 
 PRIVATE void vBitmapSet(uint16 idx)
 {
