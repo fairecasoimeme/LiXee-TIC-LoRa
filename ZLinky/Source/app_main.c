@@ -318,6 +318,16 @@ void main_task (uint32_t parameter)
          /* Main loop cooperatif LoRa-only (Zigbee runtime supprime) */
         ZTIMER_vTask();
         APP_taskRouter();
+
+        /* Chemin de secours appui long : le flag est mis directement par le
+         * scan bouton, hors file APP_msgAppEvents (qui peut deborder et faire
+         * perdre l'event). Traite ici, independamment de la file. */
+        if (g_u8LoraPairButtonRequest)
+        {
+            g_u8LoraPairButtonRequest = 0;
+            APP_vLoraPairOnButton(APP_E_EVENT_LEAVE_AND_RESET);
+        }
+
         APP_vLoRaTicPollTx();
 
 

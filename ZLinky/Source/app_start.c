@@ -51,6 +51,7 @@
 #include "sx1280_config.h"
 #include "app_lora_tic.h"
 #include "app_lora_channels.h"
+#include "app_version.h"
 
 #ifdef APP_LOW_POWER_API
 #include "PWR_interface.h"
@@ -121,6 +122,8 @@ extern void OSA_TimeInit(void);
 
 static void ConfigureLoRa(void)
 {
+	PRINTF("\r\n=== ZLinky LoRa - firmware %s (0x%04X) ===\r\n",
+	       APP_pcVersionString(), APP_VERSION_U16);
 	PRINTF("=== Configuration LoRa (module NiceRF LORA1280-TCXO) ===\r\n");
 
 	    /*
@@ -200,14 +203,15 @@ static void ConfigureLoRa(void)
 	    //    CRC:      0x20 = on, 0x00 = off (PAS 0/1)
 	    //    InvertIQ: 0x40 = normal, 0x00 = inverted (PAS 0/1)
 	    SX1280_LoRaPacketParams_t packetParams = {
-	        .preambleLength = 0x18,       // 16 symboles : mant=8 * 2^exp=1
+	        .preambleLength = SX1280_LORA_PREAMBLE,  // cf. sx1280.h
 	        .headerType = SX1280_LORA_HEADER_EXPLICIT,
 	        .payloadLength = 255,         // Max, sera mis a jour avant chaque TX
 	        .crc = SX1280_LORA_CRC_ON,
 	        .invertIQ = SX1280_LORA_IQ_NORMAL
 	    };
 	    SX1280_SetPacketParams(&packetParams);
-	    PRINTF("Packet Params OK (preamble=0x18=16sym, explicit, CRC=0x20, IQ=0x40)\r\n");
+	    PRINTF("Packet Params OK (preamble=0x%02X, explicit, CRC=0x20, IQ=0x40)\r\n",
+	           SX1280_LORA_PREAMBLE);
 
 	    // 9) TX Power : limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM
 	    SX1280_SetTxParams(LORA_TIC_TX_POWER_DBM, SX1280_RAMP_20_US);

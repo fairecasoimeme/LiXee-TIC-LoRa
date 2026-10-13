@@ -724,6 +724,19 @@ uint8 APP_vProcessRxDataHisto ( void )
 	static bool lf;
 	static bool cr;
 	static uint8_t carError;
+
+	/* RAZ des alertes evenementielles (ADIR1/2/3, PEJP).
+	 * Le compteur n'emet ces etiquettes que pendant l'evenement : sans RAZ
+	 * la derniere valeur resterait figee indefiniment apres sa fin.
+	 * bit0..2 = ADIR1..3, bit3 = PEJP. u8AlertSeen : etiquettes vues dans
+	 * la trame en cours (remis a 0 sur STX). au8AlertMiss : nombre de trames
+	 * valides consecutives sans l'etiquette. La RAZ n'a lieu qu'apres
+	 * HISTO_ALERT_CLEAR_FRAMES trames, pour ne pas retomber a zero sur la
+	 * trame longue que le compteur intercale entre ses trames courtes de
+	 * depassement, ni sur une trame rejetee (CRC, parite). */
+	#define HISTO_ALERT_CLEAR_FRAMES  2
+	static uint8_t u8AlertSeen;
+	static uint8_t au8AlertMiss[4];
 	/*if (loopOK>=2)
 		return 1;*/
 	if (u32Timeout>1000000)
@@ -751,6 +764,7 @@ uint8 APP_vProcessRxDataHisto ( void )
 					stx=TRUE;
 					lf=FALSE;
 					cr=FALSE;
+					u8AlertSeen=0;
 					DBG_vPrintf(1, "\r\nSTX ");
 					break;
 				case 0x03:
@@ -821,6 +835,31 @@ uint8 APP_vProcessRxDataHisto ( void )
 				cr=FALSE;
 				etx=FALSE;
 				carError=0;
+
+				/* Trame valide terminee : RAZ des alertes absentes depuis
+				 * HISTO_ALERT_CLEAR_FRAMES trames (cf. u8AlertSeen). */
+				{
+					uint8_t i;
+					for (i=0; i<4; i++)
+					{
+						if (u8AlertSeen & (1U<<i))
+						{
+							au8AlertMiss[i]=0;
+						}
+						else if (au8AlertMiss[i] < HISTO_ALERT_CLEAR_FRAMES)
+						{
+							au8AlertMiss[i]++;
+						}
+					}
+					if (au8AlertMiss[0] >= HISTO_ALERT_CLEAR_FRAMES)
+						sBaseDevice.sLinkyServerCluster.au16LinkyADIR1=0;
+					if (au8AlertMiss[1] >= HISTO_ALERT_CLEAR_FRAMES)
+						sBaseDevice.sLinkyServerCluster.au16LinkyADIR2=0;
+					if (au8AlertMiss[2] >= HISTO_ALERT_CLEAR_FRAMES)
+						sBaseDevice.sLinkyServerCluster.au16LinkyADIR3=0;
+					if (au8AlertMiss[3] >= HISTO_ALERT_CLEAR_FRAMES)
+						sBaseDevice.sLinkyServerCluster.au8LinkyPEJP=0;
+				}
 				return 1;
 			}else{
 				etx=FALSE;
@@ -998,14 +1037,17 @@ uint8 APP_vProcessRxDataHisto ( void )
 				}else if(memcmp(au8Command,"ADIR1",5)==0)
 				{
 					sBaseDevice.sLinkyServerCluster.au16LinkyADIR1=atol(au8Value);
+					u8AlertSeen|=0x01;
 
 				}else if(memcmp(au8Command,"ADIR2",5)==0)
 				{
 					sBaseDevice.sLinkyServerCluster.au16LinkyADIR2=atol(au8Value);
+					u8AlertSeen|=0x02;
 
 				}else if(memcmp(au8Command,"ADIR3",5)==0)
 				{
 					sBaseDevice.sLinkyServerCluster.au16LinkyADIR3=atol(au8Value);
+					u8AlertSeen|=0x04;
 
 				}else if(memcmp(au8Command,"DEMAIN",6)==0)
 				{
@@ -1018,6 +1060,7 @@ uint8 APP_vProcessRxDataHisto ( void )
 				}else if(memcmp(au8Command,"PEJP",4)==0)
 				{
 					sBaseDevice.sLinkyServerCluster.au8LinkyPEJP=atoi(au8Value);
+					u8AlertSeen|=0x08;
 				}else if(memcmp(au8Command,"HHPHC",4)==0)
 				{
 					memcpy(sBaseDevice.sLinkyServerCluster.au8LinkyHHPHC, au8Value,1);

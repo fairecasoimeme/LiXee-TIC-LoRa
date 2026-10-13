@@ -44,7 +44,30 @@
 /* Rendez-vous d'appairage : FIXE, independant de la config operationnelle.
  * Un ZLinky qui tourne en SF7/canal7 doit pouvoir revenir ici pour renegocier.
  * Le canal est LORA_PAIR_CHANNEL (defini dans app_lora_channels.h). */
-#define LORA_PAIR_SF                   11  /* SF du handshake (SX1280 SF11 = 0xB0) */
+/* SF du handshake d'appairage.
+ *
+ * ⚠️ DOIT etre identique cote recepteur : le rendez-vous doit etre connu
+ * a l'avance des deux cotes. Changer cette valeur sans changer le
+ * recepteur rend l'appairage totalement IMPOSSIBLE (aucune negociation
+ * n'est possible a ce stade).
+ *
+ * Historique des mesures terrain, a +10 dBm :
+ *   PAIR_REQUEST SF11 : 45 mA x 247 ms = 11,1 mA.s
+ *       -> OK sur Linky monophase, ECHOUE sur triphase (le recepteur ne
+ *          recoit rien), les deux compteurs etant au MEME endroit, a la
+ *          MEME distance du recepteur
+ *   PAIR_REQUEST SF10 : 45 mA x 124 ms =  5,6 mA.s
+ *       -> OK sur les deux
+ *
+ * Le budget d'alimentation de la prise TIC limite la CHARGE par emission
+ * (courant x airtime), pas le courant instantane, et ce budget varie
+ * selon le compteur : le seuil se situe entre ~7 et ~11 mA.s.
+ *
+ * SF11 est donc a la limite : il tient sur les installations favorables
+ * et lache sur les autres. Pour l'avoir partout il faut de la marge
+ * materielle (LDO unique : ~5 mA permanents rendus, soit ~19 % du
+ * budget ; et/ou supercap plus gros). */
+#define LORA_PAIR_SF                   11
 
 /* Extension PAIR_REQUEST (LiXee-Box >= v2.22) :
  *   Format 14+N octets, retro-compatible avec les receivers antérieurs
@@ -53,7 +76,29 @@
  *   [13]    longueur du model (N)
  *   [14..]  model ASCII (N octets)
  */
-#define LORA_PAIR_REQUEST_HAS_EXT      1  /* 1 = envoie l'extension, 0 = format legacy 11 octets */
+/* 1 = envoie l'extension (device_id + model), 0 = format legacy 11 octets.
+ *
+ * TEST EN COURS (a trancher apres essais) : passe a 0 pour discriminer la
+ * cause de l'echec d'appairage sur Linky triphase.
+ *
+ * Le LoRa quantifie par blocs de symboles, et 24 octets franchissent une
+ * marche que 19 octets ne franchissent pas (SF11/BW406) :
+ *
+ *   PAIR_REQUEST 24 o (avec ext) : 33 symboles, 268 ms -> 12,1 mA.s  ECHOUE
+ *   trame donnees  19 o          : 28 symboles, 243 ms -> 10,9 mA.s  passe
+ *                                                                    en partie
+ *   PAIR_REQUEST 11 o (legacy)   : 18 symboles, 193 ms ->  8,7 mA.s  ?
+ *
+ * Le seuil du compteur triphase est donc cerne entre 10,9 et 12,1 mA.s.
+ * Si le legacy appaire, la cause est bien la charge de la trame et rien
+ * d'autre -- et il faudra choisir entre l'identification automatique du
+ * modele et SF11 sur ce type d'installation.
+ *
+ * Retro-compatible : un recepteur lit les 11 premiers octets et ignore la
+ * suite, donc passer a 0 ne demande aucune modification cote LiXee-Box.
+ * Seule consequence : plus de device_id ni de model, donc plus de
+ * selection automatique du template data/tp/<device_id>.json. */
+#define LORA_PAIR_REQUEST_HAS_EXT      0
 #define LORA_DEVICE_ID_ZLINKY_TIC      0x0051  /* device_id LiXee du ZLinky — template data/tp/0051.json */
 #define LORA_DEVICE_MODEL_ZLINKY_TIC   "ZLinky_TIC"  /* cle dans data/tp/0051.json cote LiXee-Box */
 #define LORA_DEVICE_MODEL_MAX_LEN      32   /* garde-fou de securite (permet des noms d'objets futurs plus longs) */
@@ -68,11 +113,45 @@
 /* Pairing timeout (30 seconds) */
 #define LORA_PAIR_TIMEOUT_MS           30000
 
-/* Pairing TX interval (300ms between PAIR_REQUEST) */
-#define LORA_PAIR_TX_INTERVAL_MS       300
+/* Intervalle entre deux PAIR_REQUEST = temps de RECHARGE du supercap
+ * avant chaque tentative.
+ *
+ * Le budget d'alimentation TIC limite la charge par emission (courant x
+ * airtime) et, a SF11, on est pile au seuil sur certains compteurs. Le
+ * temps de recharge devient alors determinant. Mesures terrain, a
+ * charge identique (11,1 mA.s par trame, SF11 / +10 dBm) :
+ *
+ *   appairage, recharge 2,5 s -> ECHOUE toujours   (triphase)
+ *   donnees,   recharge 5,0 s -> passe en partie   (triphase)
+ *   appairage/donnees, SF10   -> OK partout
+ *
+ * D'ou 6000 ms : on donne a chaque PAIR_REQUEST une recharge superieure
+ * a celle des donnees, qui passent deja partiellement.
+ *
+ * Le cout est nul en nombre d'essais : contrairement a ce que suggere
+ * LORA_PAIR_TIMEOUT_MS (defini mais JAMAIS utilise), l'emetteur reessaie
+ * indefiniment jusqu'a etre appaire -- les 30 s sont la fenetre du
+ * RECEPTEUR. Et l'appairage n'a besoin que d'UN succes, contrairement
+ * aux donnees ou chaque echec est une trame perdue. */
+#define LORA_PAIR_TX_INTERVAL_MS       6000
 
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
+
+/* Puissance d'emission pendant l'appairage uniquement (dBm).
+ *
+ * On reste a +10 dBm, comme les donnees : le Linky n'est pas mobile,
+ * l'appairage se fait donc a la DISTANCE OPERATIONNELLE reelle et a
+ * besoin de toute la portee. Baisser la puissance ici reviendrait a
+ * n'autoriser l'appairage que des installations proches.
+ *
+ * La charge tiree est maitrisee par le SF du rendez-vous (SF10, cf.
+ * LORA_PAIR_SF) et non par la puissance : 5,6 mA.s a pleine puissance,
+ * contre 11,1 mA.s a SF11 qui echouait sur certaines installations.
+ *
+ * Ce define reste un point de reglage si une installation resistait
+ * malgre le SF10. */
+#define LORA_PAIR_TX_POWER_DBM         10
 
 /* LED patterns */
 #define LORA_LED_UNPAIRED_PERIOD_MS    200   /* Fast blink 5Hz */

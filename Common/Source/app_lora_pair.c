@@ -44,6 +44,10 @@
 #include "sx1280_config.h"
 #include "app_lora_channels.h"
 
+/* Horloge ms (meme source que ZTIMER) pour animer la LED pendant les
+ * boucles de poll d'appairage sans reentrer dans ZTIMER_vTask(). */
+#include "fsl_os_abstraction.h"
+
 /* ZPS for IEEE MAC address */
 #include "zps_apl_zdo.h"
 
@@ -67,6 +71,9 @@
 
 /* DIO1 pour poll RX_DONE */
 #define LORA_DIO1_PIN       SX1280_DIO1_PIN
+
+/* Cadence de clignotement LED pendant les boucles de poll d'appairage (ms) */
+#define LORA_PAIR_POLL_LED_MS  150
 
 /* Protocol version */
 #define LORA_TIC_PROTOCOL_VERSION_PAIR  0x01
@@ -104,6 +111,36 @@ PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE void vSendPairConfirm(void);
 PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
+PRIVATE void vPollLedBlink(void);
+
+
+/****************************************************************************
+ *
+ * NAME: vPollLedBlink
+ *
+ * DESCRIPTION:
+ * Anime la LED (clignotement ~150 ms) pendant les boucles de poll DIO1
+ * de l'appairage. Ces boucles s'executent dans le callback timer
+ * APP_cbTimerLoraPair et bloquent ~450-550 ms par tick : on ne peut donc
+ * PAS appeler ZTIMER_vTask() (reentrance interdite, cf. vSendPairRequest),
+ * et laisser tourner les timers de blink ZTIMER donnerait une LED figee
+ * puis un flash instantane au rattrapage. On pilote donc la LED en direct,
+ * sur base de l'horloge ms, sans toucher a ZTIMER.
+ *
+ ****************************************************************************/
+PRIVATE void vPollLedBlink(void)
+{
+    static uint32 u32LastToggleMs = 0;
+    static bool_t bLedOn = TRUE;
+
+    uint32 u32NowMs = OSA_TimeGetMsec();
+    if ((uint32)(u32NowMs - u32LastToggleMs) >= LORA_PAIR_POLL_LED_MS)
+    {
+        u32LastToggleMs = u32NowMs;
+        bLedOn = !bLedOn;
+        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, LORA_LED_PIN, bLedOn ? 1 : 0);
+    }
+}
 
 
 /****************************************************************************/
@@ -220,7 +257,9 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
         u8LedBlinkCount = 0;
         sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
 
-        /* Switch RF back to PAIR_CHANNEL for the handshake */
+        /* Pas de reset radio ici : c'est vSendPairRequest (au premier tick du
+         * timer d'appairage) qui fait la reconfig COMPLETE sur le rendez-vous.
+         * On se contente de pointer la frequence sur le canal d'appairage. */
         APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
 
         /* LED fast blink (150ms) for pairing mode */
@@ -547,6 +586,11 @@ PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF)
      * sync word, packet params, TX power, puis IRQ TX_DONE sur DIO1. */
     APP_vLoRaTicReconfigureRadio(u8Channel, u8SF);
 
+    /* Puissance reduite pour l'appairage : le reconfig ci-dessus applique
+     * la puissance des donnees (+10 dBm), on la remplace ici pour limiter
+     * le pic de courant du PA (cf. LORA_PAIR_TX_POWER_DBM). */
+    SX1280_SetTxParams(LORA_PAIR_TX_POWER_DBM, SX1280_RAMP_20_US);
+
     /* IRQ: TX_DONE + TIMEOUT on DIO1 */
     SX1280_SetDioIrqParams(
         SX1280_IRQ_TX_DONE | SX1280_IRQ_RX_TX_TIMEOUT,
@@ -623,7 +667,14 @@ PRIVATE void vSendPairRequest(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();  /* LED blink pendant le poll TX */
+        /* NE PAS appeler ZTIMER_vTask() ici : vSendPairRequest est appelee
+         * depuis le callback timer APP_cbTimerLoraPair, donc ce serait une
+         * REENTRANCE du dispatcher ZTIMER. Le ZTIMER_vTask du SDK JN518x
+         * reutilise u32Ticks comme delta ET timestamp : en reentrance il lit
+         * le delta comme un timestamp -> expire TOUS les timers d'un coup et
+         * declenche leurs callbacks en cascade (radio reconfiguree en plein
+         * TX, pile timers corrompue) -> blocage. On anime la LED en direct. */
+        vPollLedBlink();
     }
 
     /* Clear IRQ */
@@ -667,7 +718,8 @@ PRIVATE bool_t bListenForPairResponse(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();  /* LED blink pendant le poll RX */
+        /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
+        vPollLedBlink();
     }
 
     if (!bDio1)
@@ -834,7 +886,8 @@ PRIVATE void vSendPairConfirm(void)
             bDio1 = TRUE;
             break;
         }
-        ZTIMER_vTask();
+        /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
+        vPollLedBlink();
         /* Periodic status check */
         if ((u32Start % u32StatusCheckPeriod) == 0 && u32Start > 0)
         {

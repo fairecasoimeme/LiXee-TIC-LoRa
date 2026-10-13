@@ -101,7 +101,8 @@
 #define LORA_TIC_EXT_METER_SERIAL     0x08  /* ADSC (Std) / ADCO (Histo) en ASCII (4..16B) */
 #define LORA_TIC_EXT_METER_DATE       0x09  /* DATE horodate compteur, Std seul (4..17B) */
 #define LORA_TIC_EXT_TARIFF_OPTION    0x0A  /* OPTARIF + DEMAIN (Histo) + CCASN/-1 (Std) (16B) */
-#define LORA_TIC_EXT_SUBTYPE_COUNT    11
+#define LORA_TIC_EXT_HISTO_ALERTS     0x0B  /* PEJP + PPOT + ADIR1/2/3 (Histo) (12B) */
+#define LORA_TIC_EXT_SUBTYPE_COUNT    12
 
 /* Taille max d'un paquet DATA_EXTENDED (TARIFF_LABEL = 6 + 16 = 22B) */
 #define LORA_TIC_DATA_EXTENDED_MAX_SIZE 22

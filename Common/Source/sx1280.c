@@ -181,7 +181,7 @@ void SX1280_SendPayload(uint8_t *payload, uint8_t size)
      *    pour generer le header LoRa et calculer le temps d'emission.
      *    RadioLib le fait systematiquement avant chaque TX.
      */
-    buf[0] = 0x18;                      /* preambleLength = 16 sym (mant=8 * 2^1) */
+    buf[0] = SX1280_LORA_PREAMBLE;      /* cf. SX1280_LORA_PREAMBLE dans sx1280.h */
     buf[1] = SX1280_LORA_HEADER_EXPLICIT;  /* headerType = explicit */
     buf[2] = size;                      /* payloadLength = taille reelle */
     buf[3] = SX1280_LORA_CRC_ON;       /* CRC on */

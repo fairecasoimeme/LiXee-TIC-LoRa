@@ -55,6 +55,30 @@
 #define LORA_ZCL_TYPE_CHAR_STRING   0x42
 
 /* Cluster IDs adressables — memes identifiants que le firmware Zigbee LiXee */
+/* Cluster Basic : identification de l'objet lui-meme (pas du compteur).
+ *
+ * Sert au recepteur a choisir le template d'affichage apres l'appairage :
+ * il interroge d'abord DEVICE_ID (qui nomme le fichier
+ * data/tp/<device_id>.json), puis MODEL (la cle dans ce fichier).
+ *
+ * Ces deux valeurs etaient auparavant transportees dans le PAIR_REQUEST.
+ * Elles l'alourdissaient de 11 a 24 octets, soit 8,7 -> 12,1 mA.s a SF11,
+ * ce qui depassait le budget d'alimentation TIC de certains compteurs et
+ * rendait l'appairage impossible (cf. LORA_PAIR_REQUEST_HAS_EXT). Les
+ * exposer en POLL ne coute donc RIEN sur le chemin critique : le
+ * recepteur les demande une fois, quand il veut, apres l'appairage. */
+#define LORA_CLUSTER_BASIC          0x0000  /* identification de l'objet */
+#define LORA_ATTR_BASIC_MODEL       0x0005  /* ModelIdentifier (ZCL standard) */
+#define LORA_ATTR_BASIC_DEVICE_ID   0xFF00  /* device_id (specifique LiXee) */
+/* Version du firmware (cf. app_version.h). Deux formes :
+ *   FW_VERSION  : uint16 0xMMmp, comparable numeriquement — c'est la valeur
+ *                 a confronter au champ version d'OTA_START pour decider
+ *                 d'une mise a jour ;
+ *   SW_BUILD_ID : chaine "1.0.0+<commit git>", pour l'affichage et le
+ *                 support (identifie le build exact). */
+#define LORA_ATTR_BASIC_FW_VERSION  0xFF01  /* version firmware uint16 (specifique LiXee) */
+#define LORA_ATTR_BASIC_SW_BUILD_ID 0x4000  /* SWBuildID (ZCL standard) */
+
 #define LORA_CLUSTER_LIXEE          0xFF66  /* cluster custom LiXee (TIC) */
 #define LORA_CLUSTER_METERING       0x0702  /* Simple Metering (index energie) */
 #define LORA_CLUSTER_ELEC_MEAS      0x0B04  /* Electrical Measurement (puissances) */

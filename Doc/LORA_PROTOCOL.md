@@ -12,16 +12,35 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | Paramètre | Valeur |
 |---|---|
 | Chip | SX1280 / SX1281 (LoRa 2.4 GHz) |
-| Spreading Factor | **SF11** |
+| Spreading Factor | **negocie a l'appairage** (7..12) — assigner **SF10**, cf. §4.2 |
 | Bandwidth | **BW 406 kHz** |
 | Coding Rate | **4/5** |
-| Preamble | 16 symboles (encodé `0x18`) |
+| Preamble | **8 symboles** (encodé `0x08`) — ⚠️ le récepteur doit utiliser la même valeur |
 | Header | Explicit |
 | CRC | ON |
 | IQ | Normal |
 | Sync Word | registre `0x0944` = `{0x14, 0x24}` (équivalent RadioLib `setSyncWord(0x12)`) |
 | TX Power | **+10 dBm** — limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM |
 | Regulator | LDO |
+
+> ⚠️ **Le préambule est passé de 16 à 8 symboles** — le `preambleLength` du
+> récepteur doit être **≤ 8**, sinon il attend des symboles qui n'arrivent
+> jamais et ne détecte **plus aucune trame** (panne nette, pas dégradation).
+>
+> **Pourquoi** : à SF11/BW406 le préambule coûte 102 ms à 16 symboles contre
+> 62 ms à 8, soit **1,8 mA·s économisés sur chaque trame**. Le budget
+> d'alimentation de la prise TIC limite la charge par émission, et certains
+> compteurs sont juste au-dessus du seuil. Mesures terrain sur un Linky
+> triphasé (SF11, +10 dBm) :
+>
+> | Préambule | Charge ESSENTIAL | Trames émises avec succès |
+> |---|---|---|
+> | 16 symboles | 11,0 mA·s | **36 %** (9/25) |
+> | **8 symboles** | **9,1 mA·s** | **100 %** (91/91, 0 perte au récepteur) |
+>
+> La sensibilité ne dépend que du SF/BW/CR : 8 symboles ne coûte pas de
+> portée, seulement un peu de marge de détection à très faible SNR. LoRaWAN
+> utilise 8 symboles pour tous ses uplinks.
 
 ### Plan de fréquences (8 canaux)
 
@@ -30,7 +49,7 @@ Version protocole : **v1** — dernière mise à jour : firmware ZLinky LoRa 202
 | 0 | 2 410 MHz | bas de bande |
 | 1 | 2 420 MHz | |
 | 2 | 2 430 MHz | |
-| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés) |
+| **3** | **2 440 MHz** | **PAIR_CHANNEL** (canal d'appairage, fixe et connu des deux côtés, **SF11**) |
 | 4 | 2 450 MHz | |
 | 5 | 2 460 MHz | |
 | 6 | 2 470 MHz | |
@@ -127,6 +146,23 @@ SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre u
 fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
 300 ms et écoute 200 ms après chaque envoi.
 
+> ⚠️ **Le SF du rendez-vous doit être identique côté récepteur**, sinon plus
+> aucun appairage n'est possible — il n'y a pas de négociation à ce stade.
+>
+> **SF11 est à la limite du budget d'alimentation TIC.** Mesures terrain à
+> +10 dBm, deux compteurs au même endroit et à la même distance du récepteur :
+>
+> | Rendez-vous | Charge par PAIR_REQUEST | Monophasé | Triphasé |
+> |---|---|---|---|
+> | SF11 | 45 mA × 247 ms = 11,1 mA·s | ✅ | ❌ rien reçu |
+> | SF10 | 45 mA × 124 ms = 5,6 mA·s | ✅ | ✅ |
+>
+> Le budget limite la **charge** par émission (courant × airtime), pas le
+> courant instantané, et il **varie selon le compteur** : le seuil est entre
+> ~7 et ~11 mA·s. SF11 tient donc sur les installations favorables et lâche
+> sur les autres. Passer le rendez-vous en SF10 le rend fiable partout, pour
+> −2,5 dB de sensibilité et sans toucher à la puissance.
+
 **C'est l'appairage qui fixe le SF et le canal opérationnels.** Ce sont des
 paramètres **réseau**, communs à tous les ZLinky d'un même récepteur, pas des
 réglages par appareil. Pour les changer, on **refait un appairage** (appui long).
@@ -196,6 +232,21 @@ type
 Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3). Si
 `op_SF` est hors plage, il retombe sur **SF11**.
 
+> ⚠️ **Le récepteur devrait assigner `op_SF = 10`, pas 11.** Le repli firmware
+> est SF11, mais c'est le récepteur qui décide — et SF11 ne passe pas partout. Le budget
+> d'alimentation de la prise TIC limite la **charge** tirée par émission
+> (courant × airtime), pas le courant instantané. Mesures terrain, à pic de
+> courant identique (45 mA) :
+>
+> | Config | Charge par trame | Résultat |
+> |---|---|---|
+> | SF11 / +10 dBm | 11,1 mA·s | ❌ échoue sur certains compteurs |
+> | SF10 / +10 dBm | 5,6 mA·s | ✅ |
+>
+> SF10 à pleine puissance est préférable à SF11 à puissance réduite : moins
+> de charge **et** meilleure portée (−2,5 dB de sensibilité contre −10 dB de
+> puissance).
+
 > **Rétrocompat** : un récepteur qui envoie encore l'ancien format **20 octets**
 > (sans `op_SF`) est accepté ; l'émetteur applique SF11 par défaut. Un ZLinky
 > anciennement appairé (enregistrement PDM sans SF) fait de même.
@@ -224,14 +275,83 @@ le device connaît bien la clé → appairage validé.
 
 | Élément | Période |
 |---|---|
-| DATA_ESSENTIAL | **toutes les 5 s** (valeur par défaut, négociée à l'appairage) |
-| DATA_EXTENDED | **1 tous les 4 ESSENTIAL** → toutes les **20 s** |
-| Cycle complet des 11 sous-types EXTENDED | **~220 s** (~3 min 40) |
+| Élément | Nominal | Mesuré (Standard triphasé) |
+|---|---|---|
+| DATA_ESSENTIAL | 5 s (négocié à l'appairage) | **~9 s** |
+| DATA_EXTENDED | 1 tous les 4 ESSENTIAL → 20 s | **~37,5 s** |
 
-Les sous-types EXTENDED tournent en round-robin : 0x00 → 0x01 → … → 0x0A → 0x00 …
+> **Pourquoi l'écart** : l'intervalle de 5 s ne redémarre qu'**après** la fin
+> du cycle, et chaque cycle commence par une acquisition TIC bloquante (~3 s
+> en Standard triphasé à 9600 bauds), suivie du TX, de la fenêtre RX de 300 ms
+> et, une fois sur quatre, de l'intervalle inter-trames et de l'EXTENDED. Le
+> récepteur ne doit donc **pas** déduire une perte de trame d'un écart
+> supérieur à 5 s : seul le numéro de séquence fait foi.
 
-Un EXTENDED est envoyé **juste après** l'ESSENTIAL correspondant (piggyback),
-en deux trames radio distinctes.
+### Ordre des sous-types EXTENDED
+
+Les sous-types ne tournent **pas** en round-robin uniforme : l'ordre suit une
+table de séquence pondérée, pour que les index d'énergie soient rafraîchis
+plus souvent que les données qui ne changent jamais.
+
+**1. Tour de démarrage** — après chaque reset du ZLinky, les 12 sous-types
+sont émis une fois chacun dans l'ordre `0x00 → 0x01 → … → 0x0B` (~7 min 30).
+Le récepteur dispose ainsi de toutes les données, y compris les
+quasi-statiques, sans attendre leur créneau dans la table.
+
+**2. Table pondérée** — ensuite, 24 créneaux répétés indéfiniment :
+
+```
+01 00 04  01 03 05  01 07 02  01 00 04  01 03 05  01 07 0A  01 08 09  01 06 0B
+```
+
+| Sous-type | Créneaux / 24 | Période (à ~37,5 s par EXTENDED) |
+|---|---|---|
+| `0x01` ENERGY | 8 | **~1 min 52** |
+| `0x00` CURRENT_VOLTAGE | 2 | ~7 min 30 |
+| `0x03` VOLTAGE_STATS | 2 | ~7 min 30 |
+| `0x04` POWER_MAX_CFG | 2 | ~7 min 30 |
+| `0x05` DAILY_ENERGY | 2 | ~7 min 30 |
+| `0x07` TARIFF_LABEL | 2 | ~7 min 30 |
+| `0x02` ENERGY_2 | 1 | ~15 min |
+| `0x06` COMPLEMENT | 1 | ~15 min |
+| `0x08` METER_SERIAL | 1 | ~15 min |
+| `0x09` METER_DATE | 1 | ~15 min |
+| `0x0A` TARIFF_OPTION | 1 | ~15 min |
+| `0x0B` HISTO_ALERTS | 1 | ~15 min |
+
+**3. Remontée sur changement** — quand une valeur événementielle change,
+son sous-type passe en priorité au prochain EXTENDED (≤ ~37,5 s) au lieu
+d'attendre son créneau :
+
+| Valeur surveillée | Sous-type émis en priorité |
+|---|---|
+| PEJP, PPOT, ADIR1/2/3 (Historique) | `0x0B` HISTO_ALERTS |
+| LTARF (Standard) / PTEC (Historique) | `0x07` TARIFF_LABEL |
+| DEMAIN (Historique Tempo) | `0x0A` TARIFF_OPTION |
+
+Le créneau prévu est seulement retardé d'un EXTENDED. Il n'y a jamais deux
+trames prioritaires d'affilée, pour qu'une valeur qui change sans cesse
+(ADIR pendant un dépassement) ne bloque pas la table. Une trame prioritaire
+a le même format qu'une trame normale : rien ne la distingue côté récepteur.
+
+En Standard, les changements d'état remontent de toute façon en ~9 s par le
+registre STGE de l'ESSENTIAL.
+
+Le débit radio est inchangé (même nombre de trames) : seul l'ordre change.
+Le récepteur ne doit faire **aucune hypothèse sur l'ordre** d'arrivée — il
+identifie chaque trame par son octet de sous-type. Une donnée nécessaire plus
+vite que sa période peut être lue à la demande par POLL (§8).
+
+Un EXTENDED est envoyé **après** l'ESSENTIAL correspondant (piggyback), en deux
+trames radio distinctes, séparées par un **intervalle d'environ 1 s**.
+
+> **Pourquoi cet intervalle** : sans lui, les deux trames s'enchaînent à
+> ~30-50 ms (le temps du reconfig radio côté émetteur). C'est trop court pour
+> un récepteur qui doit déchiffrer la première puis la publier en MQTT avant
+> l'arrivée du préambule de la seconde — il rate alors systématiquement
+> l'EXTENDED. Le récepteur doit malgré tout **ré-armer la réception
+> immédiatement** après chaque trame et déporter le traitement hors de la
+> boucle d'écoute : l'intervalle est une marge, pas une garantie.
 
 ### Période réelle
 
@@ -310,7 +430,7 @@ Valeurs observées :
 |---|---|---|
 | 0 | 1 | `0x12` |
 | 1 | 1 | seq |
-| 2 | 1 | **sub_type** (0x00..0x06) |
+| 2 | 1 | **sub_type** (0x00..0x0B) |
 
 ### 7.1 Sub-type `0x00` — CURRENT_VOLTAGE (15 octets)
 
@@ -567,9 +687,9 @@ horloge synchronisée) :
 type
 ```
 
-> ⚠️ **Fraîcheur** : ce sous-type ne passe qu'une fois par cycle round-robin,
-> soit toutes les ~3 min 40. L'horodate reçue peut donc avoir jusqu'à ~3 min
-> de retard — utilisable pour vérifier/dériver l'horloge du compteur, pas
+> ⚠️ **Fraîcheur** : ce sous-type n'occupe qu'un créneau de la table de
+> séquence (§5), soit toutes les ~15 min. L'horodate reçue peut donc avoir
+> jusqu'à ~15 min de retard — utilisable pour vérifier/dériver l'horloge du compteur, pas
 > comme source de temps précise.
 
 ### 7.11 Sub-type `0x0A` — TARIFF_OPTION (16 octets)
@@ -617,6 +737,34 @@ Exemple de trame (Historique Tempo, `OPTARIF = "BBR("`, `DEMAIN = "BLEU"`) :
 │  seq
 type
 ```
+
+---
+
+### 7.12 Sub-type `0x0B` — HISTO_ALERTS (12 octets)
+
+Alertes et préavis **spécifiques au mode Historique** (préavis EJP,
+dépassements de puissance par phase en triphasé). En Standard ces étiquettes
+n'existent pas : si `mode` (offset 3) indique le Standard, le récepteur peut
+ignorer le paquet.
+
+| Offset | Taille | Champ | Signification |
+|---|---|---|---|
+| 3 | 1 | mode Linky (même encodage que §6.1) | |
+| 4 | 1 | `PEJP` (uint8) | Préavis EJP : minutes avant le début de la période EJP |
+| 5 | 1 | `PPOT` (uint8) | Présence des potentiels (triphasé) |
+| 6-7 | 2 | `ADIR1` (uint16 BE, VA) | Avertissement dépassement puissance phase 1 |
+| 8-9 | 2 | `ADIR2` (uint16 BE, VA) | Avertissement dépassement puissance phase 2 |
+| 10-11 | 2 | `ADIR3` (uint16 BE, VA) | Avertissement dépassement puissance phase 3 |
+
+> `PPOT` et `ADIR1/2/3` ne sont émis par le compteur qu'en **triphasé** ; en
+> monophasé Historique ils valent 0. `PEJP` n'a de sens que pour un abonné
+> **option EJP**.
+
+> **Fin d'alerte** : `PEJP` et `ADIR1/2/3` ne sont émis par le compteur que
+> pendant l'événement. Le ZLinky les remet à **0** après 2 trames TIC valides
+> consécutives sans l'étiquette (~18 s) ; `0` signifie donc « pas d'alerte en
+> cours ». Le début comme la fin de l'alerte déclenchent une trame
+> prioritaire (§5).
 
 ---
 
@@ -700,7 +848,46 @@ Types ZCL utilisés :
 
 **Tous les attributs TIC disponibles sont adressables**, répartis sur 4 clusters
 aux mêmes identifiants que le firmware Zigbee LiXee — la connaissance des
-clusters se transfère d'un monde à l'autre.
+clusters se transfère d'un monde à l'autre. S'y ajoute le cluster **Basic**,
+qui décrit l'objet lui-même et non le compteur.
+
+**Cluster Basic `0x0000`** (identification de l'objet) :
+
+| attr | Champ | Type | Valeur ZLinky LoRa |
+|---|---|---|---|
+| `0xFF00` | **device_id** | uint16 | `0x0051` |
+| `0x0005` | **ModelIdentifier** | char string | `"ZLinky_TIC"` |
+| `0xFF01` | **version firmware** | uint16 | `0x0100` pour 1.0.0 |
+| `0x4000` | **SWBuildID** | char string | `"1.0.0+abc1234"` |
+
+> **Version du firmware** : numérotée `MAJEUR.MINEUR.CORRECTIF`.
+>
+> - `0xFF01` la donne sur 16 bits au format `0xMMmp` (MM = majeur, m = mineur,
+>   p = correctif) : 1.2.3 → `0x0123`. Les valeurs se comparent numériquement,
+>   et c'est le même encodage que le champ version d'OTA_START (§10). Le
+>   récepteur lit cet attribut pour décider d'une mise à jour, puis le relit
+>   après l'OTA pour vérifier qu'elle a pris.
+> - `0x4000` la donne en clair, suivie du commit git du build
+>   (`+abc1234`). Le suffixe `-dirty` signale un build de développement fait
+>   avec des sources non commitées ; `nogit` remplace le commit si git était
+>   absent à la compilation. À afficher tel quel et à joindre aux demandes de
+>   support.
+> - Un changement de **majeur** signale une rupture de compatibilité radio.
+>
+> Un firmware antérieur à 1.0.0 répond `UNKNOWN_ATTR` à ces deux attributs.
+
+> **À quoi ça sert** : après l'appairage, le récepteur interroge d'abord
+> `0xFF00` pour connaître le `device_id` — qui nomme le fichier
+> `data/tp/<device_id>.json` — puis `0x0005` pour le `model`, qui en est la clé.
+> Il peut alors appliquer le bon template.
+>
+> **Pourquoi en POLL et non dans le PAIR_REQUEST** : ces deux champs y étaient
+> auparavant, et faisaient passer la trame de 11 à 24 octets, soit **8,7 →
+> 12,1 mA·s** à SF11. C'est au-delà du budget d'alimentation de la prise TIC de
+> certains compteurs, et l'appairage devenait **impossible** — le PAIR_REQUEST
+> est la trame la plus répétée du protocole. Les exposer en POLL ne coûte rien
+> sur le chemin critique : le récepteur les demande **une seule fois**, quand il
+> veut, après l'appairage. Le PAIR_REQUEST reste au format 11 octets.
 
 **Cluster LiXee `0xFF66`** (données TIC spécifiques) :
 
@@ -802,7 +989,9 @@ encore envoyées** en LoRa :
 `PJOURF+1`, `PPOINTE`, `SMAXIN-1`, `SMAXSN-1`, `SMAXSN1-1`..`SMAXSN3-1`,
 `CCAIN-1`, `VTIC`, `NGTF`, `MSG1`, `MSG2`, `PRM`
 
-**Historique** : `PEJP`, `HHPHC`, `PPOT`, `ADIR1`..`ADIR3`, `PMAX`, `MOTDETAT`
+**Historique** : `HHPHC`, `MOTDETAT`
+*(`PAPP` et `PMAX` désormais transmis — ESSENTIAL / POWER_MAX_CFG ;
+`PEJP`, `PPOT`, `ADIR1`..`ADIR3` transmis via HISTO_ALERTS §7.12)*
 
 ---
 
@@ -814,23 +1003,89 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 
 | Type | Nom | Sens | Taille (clair) |
 |---|---|---|---|
-| `0x06` | OTA_START | box → device | 15 B |
+| `0x06` | OTA_START | box → device | 15 B, ou 16 B avec la fenêtre |
 | `0x07` | OTA_BLOCK | box → device | 68 B (4 + 64 de données) |
 | `0x08` | OTA_END | box → device | 7 B |
 | `0x09` | OTA_ACK | device → box | 7 B |
 | `0x0A` | OTA_STATUS | device → box | 8 B |
 
-### OTA_START (15 octets)
+### Déroulement
+
+Le ZLinky doit être en **mode OTA recovery** (bouton maintenu à la mise sous
+tension). Il écoute alors en continu, pendant 5 minutes, sur le canal et le SF
+opérationnels, et **n'émet rien de lui-même** : c'est le récepteur qui ouvre
+l'échange.
+
+1. Le récepteur émet `OTA_START` et le répète jusqu'à recevoir un `OTA_ACK`.
+2. Le récepteur envoie les `OTA_BLOCK` dans l'ordre. Le ZLinky acquitte par
+   **fenêtre** de W blocs (voir ci-dessous).
+3. Le récepteur émet `OTA_END`. Le ZLinky vérifie l'image, acquitte, puis
+   redémarre sur le nouveau firmware.
+
+Après le redémarrage, le récepteur peut relire la version par POLL (§8,
+attribut `0xFF01`) pour vérifier que la mise à jour a pris.
+
+### Acquittement par fenêtre
+
+Acquitter chaque bloc obligerait le ZLinky à émettre toutes les ~0,7 s, ce que
+l'alimentation TIC ne supporte pas. Le récepteur demande donc une fenêtre de
+W blocs dans `OTA_START` (W = 16 recommandé) :
+
+- le ZLinky **n'émet que sur un bloc de fin de fenêtre** : un bloc dont l'index
+  vérifie `(index + 1) % W == 0`, ou le dernier bloc de l'image ;
+- son `OTA_ACK` porte alors l'index du **prochain bloc attendu**, statut `OK` ;
+- un bloc hors séquence (trou ou doublon) est **ignoré en silence**.
+
+Algorithme côté récepteur, pour une fenêtre couvrant les blocs `a` à `b`
+(`b` = fin de fenêtre) :
+
+1. Envoyer les blocs `a`..`b` à la suite, espacés d'au moins **100 ms**.
+2. Écouter l'`OTA_ACK` pendant **2 s**.
+3. Lire `next` = index porté par l'ACK :
+   - `next == b + 1` : fenêtre reçue, passer à la suivante ;
+   - `next <= b` : un bloc a été perdu, reprendre l'étape 1 avec `a = next`
+     (même `b`) ;
+   - `next == total` : tous les blocs sont reçus, envoyer `OTA_END`.
+4. Pas d'ACK au bout de 2 s : renvoyer **uniquement le bloc `b`**, qui
+   sollicite un nouvel ACK, puis reprendre à l'étape 2. Ne pas renvoyer toute
+   la fenêtre : le ZLinky a peut-être tout reçu et c'est l'ACK qui s'est perdu.
+5. Abandonner après une dizaine d'échecs consécutifs sur la même fenêtre.
+
+Le récepteur ne doit **jamais émettre pendant qu'il attend un ACK** : la
+liaison est à l'alternat, il brouillerait la réponse.
+
+**Durées à SF11 / BW 406 kHz :**
+
+| Trame | Octets sur l'air (avec MIC) | Durée |
+|---|---|---|
+| OTA_START | 18 | ~205 ms |
+| OTA_BLOCK | 70 | ~430 ms |
+| OTA_ACK | 9 | ~150 ms |
+
+Avec W = 16, une fenêtre dure environ 8,5 s et le ZLinky n'émet qu'une fois
+par fenêtre, comme en fonctionnement normal. Un firmware de 200 ko
+(~3150 blocs) se transfère en **environ 30 minutes** sans perte.
+
+**Compatibilité :** un ZLinky dont le firmware ignore la fenêtre renvoie `0`
+dans l'octet 5 de l'`OTA_ACK` de `OTA_START` et acquitte chaque bloc. Le
+récepteur doit alors travailler bloc par bloc (envoyer un bloc, attendre son
+ACK, qui porte l'index du bloc acquitté et non le suivant).
+
+### OTA_START (15 ou 16 octets)
 
 | Offset | Taille | Champ |
 |---|---|---|
 | 0 | 1 | `0x16` |
 | 1 | 1 | seq |
-| 2-3 | 2 | version du nouveau firmware (uint16 BE) |
+| 2-3 | 2 | version du nouveau firmware (uint16 BE, format `0xMMmp` — cf. §8, attribut `0xFF01`) |
 | 4-7 | 4 | taille du firmware en octets (uint32 BE) |
 | 8-11 | 4 | CRC32 du firmware complet (uint32 BE) |
 | 12-13 | 2 | nombre total de blocs (uint16 BE) |
 | 14 | 1 | taille d'un bloc (toujours 64) |
+| 15 | 1 | **optionnel** — fenêtre d'acquittement W demandée (2 à 32 ; 16 recommandé). Absent, `0` ou `1` : un ACK par bloc |
+
+Le ZLinky borne W à 32 et renvoie la valeur retenue dans l'`OTA_ACK` : c'est
+**cette valeur** que le récepteur doit utiliser.
 
 ### OTA_BLOCK (68 octets)
 
@@ -841,9 +1096,17 @@ Résumé des trames (toutes chiffrées comme les DATA) :
 | 2-3 | 2 | index du bloc (uint16 BE) |
 | 4-67 | 64 | données (dernier bloc padé à `0xFF`) |
 
-Les blocs doivent arriver **séquentiellement**. Si un bloc hors-séquence arrive,
-le device répond `OTA_ACK` avec `status = OUT_OF_RANGE` et `block_idx` = le bloc
-qu'il attend → la gateway doit reprendre à cet index.
+Les blocs doivent arriver **séquentiellement**.
+
+- **Avec fenêtre (W ≥ 2)** : un bloc hors séquence est ignoré en silence ; le
+  récepteur l'apprend par l'ACK de fin de fenêtre (voir plus haut).
+- **Sans fenêtre** : le device répond immédiatement `OTA_ACK` avec
+  `status = OUT_OF_RANGE` et `block_idx` = le bloc qu'il attend → la gateway
+  doit reprendre à cet index.
+
+Si le ZLinky n'est pas en réception (pas d'`OTA_START` accepté, ou redémarrage
+en cours de transfert), il répond `NOT_STARTED` au premier bloc reçu puis une
+fois tous les 32 blocs : le récepteur doit alors reprendre à `OTA_START`.
 
 ### OTA_END (7 octets)
 
@@ -860,9 +1123,10 @@ qu'il attend → la gateway doit reprendre à cet index.
 |---|---|---|
 | 0 | 1 | `0x19` |
 | 1 | 1 | seq (celui du paquet acquitté) |
-| 2-3 | 2 | index du bloc (uint16 BE) — `0xFFFF` pour START/END |
+| 2-3 | 2 | index (uint16 BE) — `0xFFFF` pour START/END ; avec fenêtre : **prochain bloc attendu** ; sans fenêtre : bloc acquitté |
 | 4 | 1 | status (voir table) |
-| 5-6 | 2 | réservé |
+| 5 | 1 | fenêtre W retenue (`0` = firmware sans fenêtre ou pas d'OTA en cours) |
+| 6 | 1 | réservé |
 
 **Codes status :**
 
@@ -875,6 +1139,7 @@ qu'il attend → la gateway doit reprendre à cet index.
 | `0x04` | OUT_OF_RANGE |
 | `0x05` | FW_TOO_BIG |
 | `0x06` | FW_BAD_CRC |
+| `0x07` | NOT_STARTED |
 
 ### OTA_STATUS (8 octets)
 

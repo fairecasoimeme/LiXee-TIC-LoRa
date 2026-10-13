@@ -22,6 +22,7 @@
 #include "app_lora_tic.h"
 #include "app_lora_pair.h"
 #include "app_lora_crypt.h"
+#include "app_version.h"
 
 #include "app_common.h"
 #include "App_Linky.h"
@@ -31,6 +32,9 @@
 #include "sx1280.h"
 #include "sx1280_hal.h"
 #include "sx1280_config.h"
+#ifdef WATCHDOG_ALLOWED
+#include "fsl_wwdt.h"
+#endif
 
 /****************************************************************************/
 /***        Macro Definitions                                             ***/
@@ -102,7 +106,7 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
     /* 1) payloadLength = 255 */
     {
         SX1280_LoRaPacketParams_t pktParams;
-        pktParams.preambleLength = 0x18;
+        pktParams.preambleLength = SX1280_LORA_PREAMBLE;
         pktParams.headerType     = SX1280_LORA_HEADER_EXPLICIT;
         pktParams.payloadLength  = 255;
         pktParams.crc            = SX1280_LORA_CRC_ON;
@@ -139,6 +143,11 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
             break;
         }
         ZTIMER_vTask();
+#ifdef WATCHDOG_ALLOWED
+        /* Fenetre RX de 300 ms : bornee par le compteur DWT, donc la
+         * nourrir ici ne masque aucun blocage (cf. bTransmitAndWait). */
+        WWDT_Refresh(WWDT);
+#endif
     }
 
     if (!bDio1)
@@ -266,6 +275,29 @@ PRIVATE int iBuildPollValue(uint16 u16Cluster, uint16 u16Attr,
                             uint8 *pu8Type, uint8 *pu8Out)
 {
     tsCLD_Linky *pL = &sBaseDevice.sLinkyServerCluster;
+
+    /* ========== Cluster Basic 0x0000 (identification de l'objet) ==========
+     * Permet au recepteur de choisir son template apres l'appairage, sans
+     * alourdir le PAIR_REQUEST (cf. LORA_CLUSTER_BASIC dans le .h). */
+    if (u16Cluster == LORA_CLUSTER_BASIC)
+    {
+        static const char szModel[] = LORA_DEVICE_MODEL_ZLINKY_TIC;
+
+        switch (u16Attr)
+        {
+        case LORA_ATTR_BASIC_DEVICE_ID:
+            POLL_U16(LORA_DEVICE_ID_ZLINKY_TIC);
+        case LORA_ATTR_BASIC_MODEL:
+            POLL_STR((const uint8 *)szModel, (uint8)(sizeof(szModel) - 1));
+        case LORA_ATTR_BASIC_FW_VERSION:
+            POLL_U16(APP_VERSION_U16);
+        case LORA_ATTR_BASIC_SW_BUILD_ID:
+            /* u8PutAscii s'arrete au nul terminal et borne a LORA_POLL_VALUE_MAX */
+            POLL_STR((const uint8 *)APP_pcVersionString(), LORA_POLL_VALUE_MAX);
+        default:
+            return -1;
+        }
+    }
 
     /* ================= Cluster LiXee 0xFF66 (donnees TIC) ================= */
     if (u16Cluster == LORA_CLUSTER_LIXEE)
