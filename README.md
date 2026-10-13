@@ -162,21 +162,6 @@ jour suivantes peuvent se faire par radio.
 3. Commiter, **puis** compiler : dans l'autre ordre, le binaire porte `-dirty`.
 4. Poser le tag git `vX.Y.Z`.
 
-## Brochage JN5189
-
-| Signal | Broche | Fonction |
-|---|---|---|
-| SPI_SCK | PIO2 | SPI0, horloge |
-| SPI_MISO | PIO3 | SPI0, entrée |
-| SPI_MOSI | PIO4 | SPI0, sortie |
-| NSS | PIO11 | GPIO, sélection du SX1280 |
-| RESET | PIO12 | GPIO, reset du SX1280 |
-| DIO1 | PIO13 | GPIO, interruption radio |
-| BUSY | PIO15 | GPIO, occupation du SX1280 |
-| LED | PIO10 | GPIO |
-| UART RX | PIO1 | USART1, TIC du Linky |
-| Bouton | PIO0 | appairage, mode OTA |
-
 ## LED
 
 | État | Clignotement |

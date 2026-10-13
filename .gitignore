@@ -37,3 +37,6 @@ LiXee-TIC-LoRa/
 *.tmp
 *.bak
 gawk-*
+
+# Instructions locales pour Claude Code
+CLAUDE.md
