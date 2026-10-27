@@ -39,6 +39,12 @@
 #define LORA_PAIR_REQUEST_SIZE         LORA_PAIR_REQUEST_BASE_SIZE  /* legacy alias */
 #define LORA_PAIR_RESPONSE_SIZE        21  /* type+seq+key(16)+status+op_channel+op_SF */
 #define LORA_PAIR_RESPONSE_SIZE_LEGACY 20  /* sans op_SF — receivers < v2.23 → SF11 par defaut */
+/* PAIR_RESPONSE adressee (protocole v2) : MAC de l'emetteur vise en [21..28].
+ * L'emetteur verifie que c'est le sien. Toute longueur >= 21 est acceptee ;
+ * la verification du MAC s'applique des que la trame fait au moins 29 octets
+ * (les octets suivants sont reserves a une evolution, ex. identifiant de box). */
+#define LORA_PAIR_RESPONSE_MAC_OFFSET  21
+#define LORA_PAIR_RESPONSE_SIZE_V2     (LORA_PAIR_RESPONSE_MAC_OFFSET + 8)
 #define LORA_PAIR_CONFIRM_SIZE         15  /* type+seq+MAC(8)+proof(4)+status */
 
 /* Rendez-vous d'appairage : FIXE, independant de la config operationnelle.
@@ -110,8 +116,19 @@
 /* Magic value to validate PDM record */
 #define LORA_PAIR_MAGIC                0x4C505249  /* "LPRI" */
 
-/* Pairing timeout (30 seconds) */
-#define LORA_PAIR_TIMEOUT_MS           30000
+/* Duree maximale d'une fenetre d'appairage cote emetteur.
+ *
+ * Un emetteur qui reste indefiniment en appairage finit par accepter la
+ * PAIR_RESPONSE de la premiere box qui ouvre son propre appairage, meme si
+ * elle repond a un autre emetteur : il prend alors une cle que sa box ne
+ * connait pas et semble « desappaire ». La fenetre est donc bornee :
+ *   - appui long : 60 s, le temps d'ouvrir l'appairage sur la box ;
+ *   - premier demarrage sans cle : 5 min, le temps d'aller jusqu'a la box.
+ * A l'expiration, un emetteur deja appaire reprend son appairage precedent
+ * (cle, canal, SF) ; un emetteur sans cle repasse non appaire, LED eteinte,
+ * et attend un appui long. */
+#define LORA_PAIR_WINDOW_BUTTON_MS     60000
+#define LORA_PAIR_WINDOW_BOOT_MS       300000
 
 /* Intervalle entre deux PAIR_REQUEST = temps de RECHARGE du supercap
  * avant chaque tentative.
@@ -128,11 +145,10 @@
  * D'ou 6000 ms : on donne a chaque PAIR_REQUEST une recharge superieure
  * a celle des donnees, qui passent deja partiellement.
  *
- * Le cout est nul en nombre d'essais : contrairement a ce que suggere
- * LORA_PAIR_TIMEOUT_MS (defini mais JAMAIS utilise), l'emetteur reessaie
- * indefiniment jusqu'a etre appaire -- les 30 s sont la fenetre du
- * RECEPTEUR. Et l'appairage n'a besoin que d'UN succes, contrairement
- * aux donnees ou chaque echec est une trame perdue. */
+ * Le cout en nombre d'essais reste faible : 10 essais sur la fenetre de
+ * 60 s d'un appui long (cf. LORA_PAIR_WINDOW_BUTTON_MS), et l'appairage
+ * n'a besoin que d'UN succes, contrairement aux donnees ou chaque echec
+ * est une trame perdue. */
 #define LORA_PAIR_TX_INTERVAL_MS       6000
 
 /* RX listen window after each PAIR_REQUEST (200ms) */

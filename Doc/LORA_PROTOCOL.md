@@ -144,7 +144,18 @@ L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF11**, quelle que soi
 la configuration opérationnelle. C'est ce qui permet à un ZLinky qui tourne en
 SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre une
 fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
-300 ms et écoute 200 ms après chaque envoi.
+6 s (recharge de l'alimentation TIC) et écoute 200 ms après chaque envoi.
+
+**Fenêtre côté émetteur** (firmware ≥ 1.1.0) :
+
+| Déclenchement | Durée | À l'expiration sans réponse |
+|---|---|---|
+| Appui long | 60 s | l'appairage précédent est **restauré** (clé, canal, SF) |
+| Premier démarrage, aucune clé | 5 min | l'émetteur passe non appairé, LED éteinte, et attend un appui long |
+
+Un appui long ne détruit plus l'appairage en cours : il est conservé en mémoire
+et en PDM, et n'est remplacé qu'au succès du nouvel appairage. Un appairage
+interrompu, ou capté par une autre box, ne laisse donc plus l'émetteur sans clé.
 
 > ⚠️ **Le SF du rendez-vous doit être identique côté récepteur**, sinon plus
 > aucun appairage n'est possible — il n'y a pas de négociation à ce stade.
@@ -218,16 +229,31 @@ type
 
 > Un récepteur ancien lit ses 11 premiers octets et ignore la queue — pas de casse.
 
-### 4.2 PAIR_RESPONSE — box → device (21 octets)
+### 4.2 PAIR_RESPONSE — box → device (21 octets, ou 29 adressée)
 
 | Offset | Taille | Champ |
 |---|---|---|
 | 0 | 1 | `0x14` (type PAIR_RESPONSE) |
-| 1 | 1 | seq |
+| 1 | 1 | seq — **écho obligatoire** du seq de la PAIR_REQUEST à laquelle on répond |
 | 2 | 16 | **clé AES-128** (⚠️ en clair sur l'air) |
 | 18 | 1 | status (`0x00` = OK) |
 | 19 | 1 | **op_channel** (0..7) — canal assigné pour les données |
 | 20 | 1 | **op_SF** (7..12) — spreading factor assigné pour les données |
+| 21 | 8 | **optionnel** — MAC de l'émetteur visé (big-endian, recopié de la PAIR_REQUEST) |
+
+**Filtrage côté émetteur** (firmware ≥ 1.1.0). Tous les émetteurs et toutes
+les box partagent le même rendez-vous, et rien d'autre n'identifie le
+destinataire d'une réponse. L'émetteur ignore donc une PAIR_RESPONSE :
+
+- dont le `seq` n'est pas celui de **sa dernière** PAIR_REQUEST (le seq de
+  départ est tiré au hasard à chaque entrée en appairage) ;
+- qui fait **au moins 29 octets** et dont le MAC en `[21..28]` n'est pas le sien.
+
+Le récepteur **devrait envoyer le format adressé de 29 octets** : c'est la
+seule protection fiable quand deux émetteurs sont en appairage en même temps.
+Un firmware antérieur à 1.1.0 n'accepte que 20 ou 21 octets et refuserait
+cette trame : ne passer au format 29 octets qu'une fois les émetteurs à jour,
+ou envoyer 21 octets aux émetteurs dont la version (POLL `0xFF01`) est inconnue.
 
 Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3). Si
 `op_SF` est hors plage, il retombe sur **SF11**.

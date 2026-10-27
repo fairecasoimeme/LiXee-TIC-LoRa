@@ -235,12 +235,13 @@ void SX1280_SetRx(uint16_t timeout);
 /**
  * @brief Lit le payload reçu
  * @param buffer Buffer pour recevoir les données
- * @param size Pointeur vers la taille reçue
+ * @param maxSize Taille du buffer : une trame plus longue n'est pas lue
+ * @param size Pointeur vers la taille reçue (taille reelle, meme si > maxSize)
  * @param rssi Pointeur vers le RSSI
  * @param snr Pointeur vers le SNR
  * @return 1 si données reçues, 0 sinon
  */
-uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t *size, int8_t *rssi, int8_t *snr);
+uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t maxSize, uint8_t *size, int8_t *rssi, int8_t *snr);
 
 /**
  * @brief Lit le status des IRQ

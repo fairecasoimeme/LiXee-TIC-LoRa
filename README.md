@@ -7,7 +7,7 @@ Le ZLinky est alimenté uniquement par la sortie TIC du compteur, sans pile ni
 alimentation externe. Il vise les installations où le compteur est trop loin
 du logement pour le Zigbee ou le Wi-Fi.
 
-Version courante : **1.0.0** — voir [CHANGELOG.md](CHANGELOG.md).
+Version courante : **1.1.0** — voir [CHANGELOG.md](CHANGELOG.md).
 
 ## Architecture
 
@@ -57,8 +57,9 @@ ZLinky                               Récepteur
 ```
 
 Au premier démarrage (aucune clé en mémoire), le ZLinky entre de lui-même en
-appairage. Après l'appairage, le récepteur lit `device_id`, `model` et la
-version du firmware par POLL.
+appairage pendant 5 minutes. Après un appui long, la fenêtre dure 60 secondes ;
+si elle expire, le ZLinky reprend son appairage précédent. Après l'appairage,
+le récepteur lit `device_id`, `model` et la version du firmware par POLL.
 
 ### Cadence des trames
 

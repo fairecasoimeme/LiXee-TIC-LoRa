@@ -453,7 +453,13 @@ PRIVATE void vProcessOtaRxDone(void)
     uint8 u8Len = 0;
     int8  i8Rssi = 0, i8Snr = 0;
 
-    SX1280_GetRxPayload(au8RxBuf, &u8Len, &i8Rssi, &i8Snr);
+    SX1280_GetRxPayload(au8RxBuf, sizeof(au8RxBuf), &u8Len, &i8Rssi, &i8Snr);
+
+    /* Trame trop longue (non lue par le driver) ou trop courte pour un MIC */
+    if (u8Len <= LORA_CRYPT_MIC_SIZE || u8Len > sizeof(au8RxBuf)) {
+        DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: invalid RX length %d, ignored\r\n", u8Len);
+        return;
+    }
 
     DBG_vPrintf(TRACE_LORA_OTA, "LORA_OTA: RX %d bytes RSSI=%d SNR=%d\r\n",
                 u8Len, i8Rssi, i8Snr);

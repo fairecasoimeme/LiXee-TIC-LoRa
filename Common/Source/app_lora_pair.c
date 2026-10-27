@@ -97,6 +97,19 @@ PRIVATE uint8 u8PairTickCount = 0;
 /* Pairing sequence number */
 PRIVATE uint8 u8PairSeq = 0;
 
+/* seq de la derniere PAIR_REQUEST emise : le recepteur le renvoie en echo
+ * dans sa PAIR_RESPONSE, ce qui ecarte une reponse destinee a un autre
+ * emetteur (cf. bListenForPairResponse). */
+PRIVATE uint8 u8LastReqSeq = 0;
+
+/* Nombre de ticks avant expiration de la fenetre d'appairage */
+PRIVATE uint8 u8PairMaxTicks = 0;
+
+/* Appairage en vigueur avant un appui long, conserve tel quel (RAM et PDM)
+ * jusqu'au succes du nouvel appairage. Restaure si la fenetre expire. */
+PRIVATE tsLoraPairingData sPrevPairing;
+PRIVATE bool_t bHasPrevPairing = FALSE;
+
 /* LED blink counter */
 PRIVATE uint8 u8LedBlinkCount = 0;
 
@@ -112,6 +125,8 @@ PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE void vSendPairConfirm(void);
 PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
 PRIVATE void vPollLedBlink(void);
+PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs);
+PRIVATE void vEndPairingWindow(void);
 
 
 /****************************************************************************
@@ -196,24 +211,15 @@ PUBLIC void APP_vLoraPairInit(void)
     }
     else
     {
-        /* Not paired (PDM empty/erased) → auto-pairing at boot on PAIR_CHANNEL */
-        ePairState = LORA_PAIR_PAIRING;
-        u8PairTickCount = 0;
-        u8PairSeq = 0;
-        u8LedBlinkCount = 0;
-        sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
+        /* Not paired (PDM empty/erased) → auto-pairing at boot on PAIR_CHANNEL,
+         * pendant une fenetre bornee (cf. LORA_PAIR_WINDOW_BOOT_MS). */
+        bHasPrevPairing = FALSE;
 
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Not paired — auto-entering PAIRING mode on ch %d\r\n",
-                    LORA_PAIR_CHANNEL);
-
-        /* Set RF to PAIR_CHANNEL for handshake */
-        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Not paired — auto-entering PAIRING mode on ch %d (%lu s)\r\n",
+                    LORA_PAIR_CHANNEL, (uint32)(LORA_PAIR_WINDOW_BOOT_MS / 1000));
 
         /* LED fast blink (250ms period: 100ms ON + 150ms OFF → visible 4Hz) */
-        vStartBlinkTimer(250);
-
-        /* Start pairing timer (300ms ticks — TX PAIR_REQUEST + RX listen) */
-        ZTIMER_eStart(u8TimerLoraPair, ZTIMER_TIME_MSEC(LORA_PAIR_TX_INTERVAL_MS));
+        vStartPairingWindow(LORA_PAIR_WINDOW_BOOT_MS, 250);
     }
 }
 
@@ -243,30 +249,18 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
 
         if (ePairState == LORA_PAIR_PAIRED)
         {
-            /* Erase existing pairing first */
-            DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Erasing existing pairing data\r\n");
+            /* On NE TOUCHE PAS a l'appairage en cours (RAM ni PDM) : il est
+             * mis de cote et restaure si la fenetre expire sans succes. Avant,
+             * il etait efface ici, si bien qu'un appairage interrompu, ou capte
+             * par une autre box, laissait l'emetteur sans cle valide. */
+            DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Current pairing kept until the new one succeeds\r\n");
             ZTIMER_eStop(u8TimerLoRa);
-            memset(sPairingData.au8NetKey, 0, LORA_AES_KEY_SIZE);
-            sPairingData.u32Magic = 0;
-            vErasePairingFromPDM();
+            sPrevPairing = sPairingData;
+            bHasPrevPairing = TRUE;
         }
 
-        ePairState = LORA_PAIR_PAIRING;
-        u8PairTickCount = 0;
-        u8PairSeq = 0;
-        u8LedBlinkCount = 0;
-        sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
-
-        /* Pas de reset radio ici : c'est vSendPairRequest (au premier tick du
-         * timer d'appairage) qui fait la reconfig COMPLETE sur le rendez-vous.
-         * On se contente de pointer la frequence sur le canal d'appairage. */
-        APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
-
         /* LED fast blink (150ms) for pairing mode */
-        vStartBlinkTimer(150);
-
-        /* Start pairing timer (300ms ticks) */
-        ZTIMER_eStart(u8TimerLoraPair, ZTIMER_TIME_MSEC(LORA_PAIR_TX_INTERVAL_MS));
+        vStartPairingWindow(LORA_PAIR_WINDOW_BUTTON_MS, 150);
         return;
     }
 
@@ -409,8 +403,13 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
     if (ePairState != LORA_PAIR_PAIRING)
         return;
 
-    /* ---- PAIRING: TX/RX cycle (300ms, loops forever until paired) ---- */
+    /* ---- PAIRING: TX/RX cycle, jusqu'au succes ou a la fin de la fenetre ---- */
     u8PairTickCount++;
+    if (u8PairTickCount > u8PairMaxTicks)
+    {
+        vEndPairingWindow();
+        return;
+    }
 
     /* 1) Send PAIR_REQUEST (~250ms TX time at SF11) */
     vSendPairRequest();
@@ -428,6 +427,8 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
         vSavePairingToPDM();
         PRINTF("[PAIR-CB] PDM save done\r\n");
 
+        /* Le nouvel appairage remplace l'ancien : plus rien a restaurer */
+        bHasPrevPairing = FALSE;
         ePairState = LORA_PAIR_PAIRED;
 
         DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: *** PAIRED SUCCESSFULLY ***\r\n");
@@ -489,6 +490,76 @@ PUBLIC void APP_vLoraPairErase(void)
 /****************************************************************************/
 /***        Local Functions                                               ***/
 /****************************************************************************/
+
+/****************************************************************************
+ *
+ * NAME: vStartPairingWindow
+ *
+ * DESCRIPTION:
+ * Entre en mode appairage pour u32WindowMs au plus (cf. LORA_PAIR_WINDOW_*).
+ *
+ * Le seq de depart est tire au hasard : tous les emetteurs repartaient de 0,
+ * si bien que deux emetteurs en appairage au meme moment emettaient les memes
+ * seq et ne pouvaient pas distinguer leurs reponses (cf. u8LastReqSeq).
+ *
+ ****************************************************************************/
+PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs)
+{
+    ePairState = LORA_PAIR_PAIRING;
+    u8PairTickCount = 0;
+    u8PairMaxTicks = (uint8)((u32WindowMs + LORA_PAIR_TX_INTERVAL_MS - 1) / LORA_PAIR_TX_INTERVAL_MS);
+    u8PairSeq = (uint8)(OSA_TimeGetMsec() ^ sPairingData.au8MAC[7] ^
+                        (sPairingData.au8MAC[6] << 3));
+    u8LedBlinkCount = 0;
+    sPairingData.u8OpChannel = LORA_PAIR_CHANNEL;
+
+    /* Pas de reset radio ici : c'est vSendPairRequest (au premier tick du
+     * timer d'appairage) qui fait la reconfig COMPLETE sur le rendez-vous.
+     * On se contente de pointer la frequence sur le canal d'appairage. */
+    APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
+
+    vStartBlinkTimer(u32BlinkMs);
+
+    ZTIMER_eStart(u8TimerLoraPair, ZTIMER_TIME_MSEC(LORA_PAIR_TX_INTERVAL_MS));
+}
+
+/****************************************************************************
+ *
+ * NAME: vEndPairingWindow
+ *
+ * DESCRIPTION:
+ * Fin de fenetre sans appairage. Un emetteur deja appaire reprend son
+ * appairage precedent, intact en PDM ; un emetteur sans cle repasse non
+ * appaire et attend un appui long.
+ *
+ ****************************************************************************/
+PRIVATE void vEndPairingWindow(void)
+{
+    ZTIMER_eStop(u8TimerLoraPair);
+
+    if (bHasPrevPairing)
+    {
+        sPairingData = sPrevPairing;
+        bHasPrevPairing = FALSE;
+        ePairState = LORA_PAIR_PAIRED;
+
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: pairing window expired, previous pairing restored (op_channel=%d SF%d)\r\n",
+            sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
+
+        APP_vLoraChannelSet(APP_u8LoraPairGetOpChannel());
+        vStartBlinkTimer(3000);
+        APP_vLoRaTicStart();
+    }
+    else
+    {
+        ePairState = LORA_PAIR_UNPAIRED;
+        vStopBlinkTimer();
+
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: pairing window expired, not paired — long press to retry\r\n");
+    }
+}
 
 /****************************************************************************
  *
@@ -624,7 +695,8 @@ PRIVATE void vSendPairRequest(void)
     uint8 u8PktLen = LORA_PAIR_REQUEST_BASE_SIZE;
 
     au8Pkt[0] = (LORA_TIC_PROTOCOL_VERSION_PAIR << 4) | LORA_TIC_PKT_PAIR_REQUEST;
-    au8Pkt[1] = u8PairSeq++;
+    u8LastReqSeq = u8PairSeq++;
+    au8Pkt[1] = u8LastReqSeq;
     memcpy(&au8Pkt[2], sPairingData.au8MAC, LORA_MAC_SIZE);
     au8Pkt[10] = 0; /* channel = default */
 
@@ -747,21 +819,24 @@ PRIVATE bool_t bListenForPairResponse(void)
     uint8 u8RxLen = 0;
     int8 i8Rssi = 0, i8Snr = 0;
 
-    SX1280_GetRxPayload(au8RxBuf, &u8RxLen, &i8Rssi, &i8Snr);
+    SX1280_GetRxPayload(au8RxBuf, sizeof(au8RxBuf), &u8RxLen, &i8Rssi, &i8Snr);
     SX1280_SetStandby(SX1280_STANDBY_RC);
     g_u8SX1280_HalSilent = 0;
 
     DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: RX len=%d RSSI=%d SNR=%d\r\n",
                 u8RxLen, i8Rssi, i8Snr);
 
-    /* Validate PAIR_RESPONSE. On accepte deux tailles :
-     *   21 = format courant (avec op_SF en [20])
-     *   20 = format legacy (receivers < v2.23) → SF11 par defaut */
-    if (u8RxLen != LORA_PAIR_RESPONSE_SIZE &&
-        u8RxLen != LORA_PAIR_RESPONSE_SIZE_LEGACY)
+    /* Validate PAIR_RESPONSE. Tailles acceptees :
+     *   20      = format legacy (receivers < v2.23) → SF11 par defaut
+     *   21..28  = format courant (avec op_SF en [20])
+     *   >= 29   = format adresse : MAC de l'emetteur vise en [21..28]
+     * Une trame plus longue que le buffer est ecartee par SX1280_GetRxPayload
+     * (u8RxLen > sizeof). */
+    if ((u8RxLen != LORA_PAIR_RESPONSE_SIZE_LEGACY &&
+         u8RxLen <  LORA_PAIR_RESPONSE_SIZE) ||
+        u8RxLen > sizeof(au8RxBuf))
     {
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Wrong size (expected %d ou %d, got %d)\r\n",
-                    LORA_PAIR_RESPONSE_SIZE, LORA_PAIR_RESPONSE_SIZE_LEGACY, u8RxLen);
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Wrong size (got %d)\r\n", u8RxLen);
         return FALSE;
     }
 
@@ -769,6 +844,24 @@ PRIVATE bool_t bListenForPairResponse(void)
     if (u8Type != LORA_TIC_PKT_PAIR_RESPONSE)
     {
         DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Wrong type (expected 0x04, got 0x%02X)\r\n", u8Type);
+        return FALSE;
+    }
+
+    /* La reponse doit renvoyer le seq de NOTRE derniere PAIR_REQUEST. Sinon
+     * c'est la reponse d'une box a un autre emetteur en appairage. */
+    if (au8RxBuf[1] != u8LastReqSeq)
+    {
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: response seq=%d, our request seq=%d → not for us, ignored\r\n",
+            au8RxBuf[1], u8LastReqSeq);
+        return FALSE;
+    }
+
+    /* Format adresse : la reponse doit porter notre MAC */
+    if (u8RxLen >= LORA_PAIR_RESPONSE_SIZE_V2 &&
+        memcmp(&au8RxBuf[LORA_PAIR_RESPONSE_MAC_OFFSET], sPairingData.au8MAC, LORA_MAC_SIZE) != 0)
+    {
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: response addressed to another MAC, ignored\r\n");
         return FALSE;
     }
 

@@ -12,6 +12,27 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.0 — isolation de l'appairage
+
+Corrige des émetteurs qui perdaient leur appairage quand un autre émetteur
+était appairé, y compris sur une autre box.
+
+### Appairage
+- Une PAIR_RESPONSE n'est acceptée que si son `seq` est celui de la dernière
+  PAIR_REQUEST de l'émetteur ; le seq de départ est tiré au hasard.
+- PAIR_RESPONSE adressée (29 octets, MAC de l'émetteur en `[21..28]`) acceptée
+  et vérifiée. Les formats 20 et 21 octets restent acceptés.
+- Un appui long ne supprime plus l'appairage en cours : il est restauré si la
+  fenêtre expire sans succès.
+- Fenêtre d'appairage bornée : 60 s après un appui long, 5 min au premier
+  démarrage. Avant, l'émetteur restait en appairage indéfiniment et finissait
+  par prendre la réponse de la première box qui ouvrait le sien.
+
+### Radio
+- Une trame reçue plus longue que le buffer prévu n'est plus copiée. Une trame
+  voisine (EXTENDED d'un autre émetteur, bloc OTA) arrivant dans la fenêtre de
+  réception de 300 ms débordait le buffer de 12 octets et écrasait la pile.
+
 ## 1.0.0 — premier lot
 
 Première version numérotée. État du firmware pour le premier lot de ZLinky LoRa.

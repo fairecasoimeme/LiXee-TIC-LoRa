@@ -174,7 +174,7 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
     uint8 u8Len = 0;
     int8  i8Rssi = 0, i8Snr = 0;
 
-    SX1280_GetRxPayload(au8RxBuf, &u8Len, &i8Rssi, &i8Snr);
+    SX1280_GetRxPayload(au8RxBuf, sizeof(au8RxBuf), &u8Len, &i8Rssi, &i8Snr);
     SX1280_SetStandby(SX1280_STANDBY_RC);
     g_u8SX1280_HalSilent = 0;
 
