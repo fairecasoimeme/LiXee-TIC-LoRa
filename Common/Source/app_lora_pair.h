@@ -154,6 +154,31 @@
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
 
+/* Duree d'emission maximale d'une PAIR_RESPONSE (29 octets a SF11 : ~255 ms).
+ * La fenetre ci-dessus borne la DETECTION de la reponse ; une reponse detectee
+ * juste avant la fin de la fenetre se termine jusqu'a cette duree plus tard.
+ * L'attente logicielle couvre donc les deux, sinon on abandonnait une reponse
+ * en cours de reception. */
+#define LORA_PAIR_RESPONSE_MAX_AIRTIME_MS  300
+
+/* PAIR_CONFIRM : recharge de l'alimentation, puis deux emissions.
+ *
+ * Le ZLinky enchaine PAIR_REQUEST, reception de la PAIR_RESPONSE et
+ * PAIR_CONFIRM. Emise ~0,65 s apres la reponse, la PAIR_CONFIRM partait
+ * sur une reserve vide sur les compteurs faibles : la box la recevait
+ * tronquee (erreur CRC) ou pas du tout (mesure sur un triphase).
+ *
+ * Les instants sont comptes depuis la reception de la PAIR_RESPONSE. La box
+ * (v3.3) attend la PAIR_CONFIRM 4 s apres la fin de sa reponse ; la seconde
+ * emission doit donc se terminer avant ~3,5 s, y compris a SF12 (~360 ms
+ * pour 15 octets) : 3000 + 360 = 3360 ms.
+ *
+ * La seconde emission rattrape une premiere coupee par une chute de tension.
+ * Elle est identique (meme seq) ; la box ignore une PAIR_CONFIRM en trop. */
+#define LORA_PAIR_CONFIRM_FIRST_MS     1700
+#define LORA_PAIR_CONFIRM_SECOND_MS    3000
+#define LORA_PAIR_CONFIRM_COUNT        2
+
 /* Puissance d'emission pendant l'appairage uniquement (dBm).
  *
  * On reste a +10 dBm, comme les donnees : le Linky n'est pas mobile,

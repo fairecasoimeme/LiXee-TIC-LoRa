@@ -12,6 +12,27 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.1 — appairage sur les compteurs à faible énergie
+
+Corrige des appairages qui échouaient sur certains compteurs (constaté sur un
+triphasé) : la box recevait une PAIR_CONFIRM tronquée, ou rien.
+
+### Appairage
+- La PAIR_CONFIRM n'est plus émise aussitôt après la PAIR_RESPONSE : le
+  ZLinky attend 1,7 s que sa réserve d'énergie se recharge, CPU en veille.
+- La PAIR_CONFIRM est émise une seconde fois, identique, à 3,0 s : elle
+  rattrape une première émission coupée par une chute de tension.
+- L'attente de la PAIR_RESPONSE est mesurée en millisecondes et couvre la
+  durée complète de la réponse : une réponse détectée en fin de fenêtre
+  n'est plus abandonnée en cours de réception.
+
+### Diagnostic
+- Console : raison exacte d'une PAIR_RESPONSE manquée (rien entendu,
+  préambule ou en-tête vus puis coupure, erreur CRC), numéro et instant de
+  chaque PAIR_CONFIRM.
+- Console : cause du dernier redémarrage au boot (POWER-ON, BROWN-OUT,
+  WATCHDOG...). BROWN-OUT signale une chute de tension.
+
 ## 1.1.0 — isolation de l'appairage
 
 Corrige des émetteurs qui perdaient leur appairage quand un autre émetteur

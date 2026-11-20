@@ -295,6 +295,27 @@ plutôt que de se retrouver appairé sur une config muette.
 Le récepteur recalcule la preuve avec la clé qu'il a générée : si ça matche,
 le device connaît bien la clé → appairage validé.
 
+**Calendrier d'émission** (firmware ≥ 1.1.1). Le ZLinky enchaîne PAIR_REQUEST,
+réception de la PAIR_RESPONSE et PAIR_CONFIRM : sur un compteur faible, une
+PAIR_CONFIRM émise aussitôt part sur une réserve vide et arrive tronquée
+(erreur CRC) ou pas du tout. Le ZLinky laisse donc la réserve se recharger, et
+émet **deux fois la même PAIR_CONFIRM** (même `seq`) :
+
+| Émission | Début, compté depuis la réception de la PAIR_RESPONSE |
+|---|---|
+| 1re PAIR_CONFIRM | **1,7 s** |
+| 2e PAIR_CONFIRM | **3,0 s** |
+
+La seconde se termine avant 3,4 s, même à SF12 (~360 ms pour 15 octets).
+
+Côté récepteur :
+
+- **attendre la PAIR_CONFIRM au moins 4 s** après la fin de la PAIR_RESPONSE ;
+- **ignorer une PAIR_CONFIRM supplémentaire** une fois l'appairage validé ;
+- un délai d'attente plus long (6 s par exemple) permettrait au ZLinky de
+  laisser davantage de temps de recharge, au prix d'une fenêtre plus longue
+  pendant laquelle le récepteur n'écoute plus le rendez-vous.
+
 ---
 
 ## 5. Cadencement des trames de données

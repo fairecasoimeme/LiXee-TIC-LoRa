@@ -317,6 +317,23 @@ PUBLIC void vAppMain(void)
     DBG_vPrintf(TRUE, "***********************************************\r\n");
     DBG_vPrintf(TRUE, "SYSCON->MEMORYREMAP = x%08x\r\n", SYSCON->MEMORYREMAP);
 
+    /* Cause du dernier redemarrage. BROWN-OUT = chute de la tension
+     * d'alimentation : sur la TIC, c'est la signature d'une emission que la
+     * reserve n'a pas pu fournir (diagnostic des appairages qui echouent).
+     * Le registre est remis a zero ensuite, pour que chaque demarrage
+     * n'affiche que sa propre cause. */
+    {
+        uint32 u32Cause = PMC->RESETCAUSE;
+        DBG_vPrintf(TRUE, "RESET CAUSE = 0x%02X%s%s%s%s%s%s\r\n", u32Cause,
+            (u32Cause & PMC_RESETCAUSE_POR_MASK)         ? " POWER-ON"  : "",
+            (u32Cause & PMC_RESETCAUSE_BODRESET_MASK)    ? " BROWN-OUT" : "",
+            (u32Cause & PMC_RESETCAUSE_WDTRESET_MASK)    ? " WATCHDOG"  : "",
+            (u32Cause & PMC_RESETCAUSE_SYSTEMRESET_MASK) ? " SYSTEM"    : "",
+            (u32Cause & PMC_RESETCAUSE_PADRESET_MASK)    ? " PIN"       : "",
+            (u32Cause & PMC_RESETCAUSE_SWRRESET_MASK)    ? " SOFTWARE"  : "");
+        POWER_ClearResetCause();
+    }
+
 
     DBG_vPrintf(TRACE_APP, "APP: Entering APP_vInitResources()\n");
     APP_vInitResources();

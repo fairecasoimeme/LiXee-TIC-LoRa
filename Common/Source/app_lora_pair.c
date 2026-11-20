@@ -47,6 +47,10 @@
 /* Horloge ms (meme source que ZTIMER) pour animer la LED pendant les
  * boucles de poll d'appairage sans reentrer dans ZTIMER_vTask(). */
 #include "fsl_os_abstraction.h"
+#ifdef WATCHDOG_ALLOWED
+#include "fsl_wwdt.h"
+extern uint8_t wdt_update_count;
+#endif
 
 /* ZPS for IEEE MAC address */
 #include "zps_apl_zdo.h"
@@ -102,6 +106,10 @@ PRIVATE uint8 u8PairSeq = 0;
  * emetteur (cf. bListenForPairResponse). */
 PRIVATE uint8 u8LastReqSeq = 0;
 
+/* Instant de reception de la PAIR_RESPONSE (ms) : origine du calendrier des
+ * PAIR_CONFIRM (cf. LORA_PAIR_CONFIRM_FIRST_MS). */
+PRIVATE uint32 u32PairRespMs = 0;
+
 /* Nombre de ticks avant expiration de la fenetre d'appairage */
 PRIVATE uint8 u8PairMaxTicks = 0;
 
@@ -122,7 +130,9 @@ PRIVATE void vErasePairingFromPDM(void);
 PRIVATE void vReadMAC(uint8 *pu8MAC);
 PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
-PRIVATE void vSendPairConfirm(void);
+PRIVATE void vSendPairConfirm(uint8 u8Seq);
+PRIVATE void vSendPairConfirms(void);
+PRIVATE void vPairWaitUntil(uint32 u32TargetMs);
 PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
 PRIVATE void vPollLedBlink(void);
 PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs);
@@ -418,9 +428,8 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
     if (bListenForPairResponse())
     {
         /* 3) Got response! Send PAIR_CONFIRM */
-        PRINTF("[PAIR-CB] before vSendPairConfirm()\r\n");
-        vSendPairConfirm();
-        PRINTF("[PAIR-CB] after vSendPairConfirm(), now SavePairingToPDM\r\n");
+        vSendPairConfirms();
+        PRINTF("[PAIR-CB] PAIR_CONFIRM sent, now SavePairingToPDM\r\n");
 
         /* 4) Save to PDM and go PAIRED */
         sPairingData.u32Magic = LORA_PAIR_MAGIC;
@@ -772,18 +781,25 @@ PRIVATE bool_t bListenForPairResponse(void)
 {
     g_u8SX1280_HalSilent = 1;
 
-    /* Reconfigure IRQ for RX */
+    /* IRQ : RX_DONE / TIMEOUT / CRC_ERROR leves sur DIO1. PREAMBLE_DETECTED
+     * et HEADER_VALID sont seulement memorises dans le registre d'IRQ, pour
+     * le diagnostic : ils disent si une reponse a commence a arriver. */
     SX1280_SetDioIrqParams(
-        SX1280_IRQ_RX_DONE | SX1280_IRQ_RX_TX_TIMEOUT | SX1280_IRQ_CRC_ERROR,
+        SX1280_IRQ_RX_DONE | SX1280_IRQ_RX_TX_TIMEOUT | SX1280_IRQ_CRC_ERROR |
+        SX1280_IRQ_PREAMBLE_DETECTED | SX1280_IRQ_HEADER_VALID,
         SX1280_IRQ_RX_DONE | SX1280_IRQ_RX_TX_TIMEOUT | SX1280_IRQ_CRC_ERROR);
 
     /* Start RX with timeout */
     SX1280_SetRx(LORA_PAIR_RX_TIMEOUT_MS);
 
-    /* Poll DIO1 for RX_DONE or timeout */
-    uint32 u32Wait;
+    /* Attente de DIO1, mesuree en millisecondes. Elle couvre la fenetre de
+     * detection PLUS la duree d'une reponse : avant, une boucle d'iterations
+     * d'environ 300 ms pouvait abandonner une PAIR_RESPONSE (~200 ms a SF11)
+     * detectee en fin de fenetre, avant sa fin de reception. */
+    uint32 u32RxStartMs = OSA_TimeGetMsec();
+    uint32 u32ElapsedMs = 0;
     bool_t bDio1 = FALSE;
-    for (u32Wait = 0; u32Wait < 3600000; u32Wait++) /* ~300ms max */
+    while (u32ElapsedMs < (LORA_PAIR_RX_TIMEOUT_MS + LORA_PAIR_RESPONSE_MAX_AIRTIME_MS))
     {
         if (GPIO_PinRead(GPIO, LORA_GPIO_PORT, LORA_DIO1_PIN))
         {
@@ -792,27 +808,38 @@ PRIVATE bool_t bListenForPairResponse(void)
         }
         /* Pas de ZTIMER_vTask() : reentrance interdite (voir vSendPairRequest). */
         vPollLedBlink();
-    }
-
-    if (!bDio1)
-    {
-        SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
-        SX1280_SetStandby(SX1280_STANDBY_RC);
-        g_u8SX1280_HalSilent = 0;
-        return FALSE;
+        u32ElapsedMs = OSA_TimeGetMsec() - u32RxStartMs;
     }
 
     /* Check IRQ status */
     uint16 u16Irq = SX1280_GetIrqStatus();
     SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
 
+    if (!bDio1)
+    {
+        SX1280_SetStandby(SX1280_STANDBY_RC);
+        g_u8SX1280_HalSilent = 0;
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: no PAIR_RESPONSE, DIO1 never raised in %lu ms (IRQ=0x%04X%s)\r\n",
+            u32ElapsedMs, u16Irq,
+            (u16Irq & SX1280_IRQ_HEADER_VALID) ? ", header seen: response cut" : "");
+        return FALSE;
+    }
+
     if (!(u16Irq & SX1280_IRQ_RX_DONE))
     {
         SX1280_SetStandby(SX1280_STANDBY_RC);
         g_u8SX1280_HalSilent = 0;
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: RX IRQ=0x%04X (no RX_DONE)\r\n", u16Irq);
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: no PAIR_RESPONSE, IRQ=0x%04X (%s)\r\n", u16Irq,
+            (u16Irq & SX1280_IRQ_CRC_ERROR) ? "CRC error: response unreadable" :
+            (u16Irq & SX1280_IRQ_HEADER_VALID) ? "timeout after header: response cut" :
+            (u16Irq & SX1280_IRQ_PREAMBLE_DETECTED) ? "timeout after preamble" :
+            "timeout, nothing heard");
         return FALSE;
     }
+
+    /* Origine du calendrier des PAIR_CONFIRM */
+    u32PairRespMs = OSA_TimeGetMsec();
 
     /* Read payload */
     uint8 au8RxBuf[32];
@@ -919,12 +946,12 @@ PRIVATE bool_t bListenForPairResponse(void)
  *   [14]    status 0x00 = OK
  *
  ****************************************************************************/
-PRIVATE void vSendPairConfirm(void)
+PRIVATE void vSendPairConfirm(uint8 u8Seq)
 {
     uint8 au8Pkt[LORA_PAIR_CONFIRM_SIZE];
 
     au8Pkt[0] = (LORA_TIC_PROTOCOL_VERSION_PAIR << 4) | LORA_TIC_PKT_PAIR_CONFIRM;
-    au8Pkt[1] = u8PairSeq++;
+    au8Pkt[1] = u8Seq;
     memcpy(&au8Pkt[2], sPairingData.au8MAC, LORA_MAC_SIZE);
 
     /* AES proof: ECB encrypt MAC (padded to 16B) with netKey */
@@ -1006,6 +1033,60 @@ PRIVATE void vSendPairConfirm(void)
     PRINTF("[CONF] step 7: SetStandby\r\n");
     SX1280_SetStandby(SX1280_STANDBY_RC);
     PRINTF("[CONF] step 8: done, returning\r\n");
+}
+
+/****************************************************************************
+ *
+ * NAME: vPairWaitUntil
+ *
+ * DESCRIPTION:
+ * Attend l'instant u32TargetMs (horloge OSA, ms), CPU en veille entre deux
+ * interruptions pour laisser la reserve se recharger. Appelee depuis le
+ * callback du timer d'appairage : pas de ZTIMER_vTask() (reentrance), mais
+ * le watchdog est nourri, l'attente pouvant durer ~3 s.
+ *
+ ****************************************************************************/
+PRIVATE void vPairWaitUntil(uint32 u32TargetMs)
+{
+    while ((int32)(u32TargetMs - OSA_TimeGetMsec()) > 0)
+    {
+#ifdef WATCHDOG_ALLOWED
+        WWDT_Refresh(WWDT);
+        wdt_update_count = 0;
+#endif
+        vPollLedBlink();
+        __WFI();
+    }
+}
+
+/****************************************************************************
+ *
+ * NAME: vSendPairConfirms
+ *
+ * DESCRIPTION:
+ * Emet LORA_PAIR_CONFIRM_COUNT fois la meme PAIR_CONFIRM, aux instants
+ * LORA_PAIR_CONFIRM_FIRST_MS / SECOND_MS comptes depuis la reception de la
+ * PAIR_RESPONSE, la radio restant en standby entre les emissions pour
+ * laisser la reserve se recharger.
+ *
+ ****************************************************************************/
+PRIVATE void vSendPairConfirms(void)
+{
+    static const uint16 au16AtMs[LORA_PAIR_CONFIRM_COUNT] = {
+        LORA_PAIR_CONFIRM_FIRST_MS,
+        LORA_PAIR_CONFIRM_SECOND_MS
+    };
+    uint8 u8Seq = u8PairSeq++;   /* meme seq pour toutes les emissions */
+    uint8 i;
+
+    for (i = 0; i < LORA_PAIR_CONFIRM_COUNT; i++)
+    {
+        vPairWaitUntil(u32PairRespMs + au16AtMs[i]);
+        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: PAIR_CONFIRM %d/%d at t+%lu ms\r\n",
+                    i + 1, LORA_PAIR_CONFIRM_COUNT,
+                    OSA_TimeGetMsec() - u32PairRespMs);
+        vSendPairConfirm(u8Seq);
+    }
 }
 
 /* LED management:
