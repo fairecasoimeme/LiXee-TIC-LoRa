@@ -10,6 +10,7 @@
 #define SX1280_CMD_WRITE_BUFFER             0x1A
 #define SX1280_CMD_READ_BUFFER              0x1B
 #define SX1280_CMD_SET_STANDBY              0x80
+#define SX1280_CMD_SET_SLEEP                0x84
 #define SX1280_CMD_SET_FS                   0xC1
 #define SX1280_CMD_SET_TX                   0x83
 #define SX1280_CMD_SET_RX                   0x82
@@ -175,6 +176,15 @@ void SX1280_Init(void);
 void SX1280_SetStandby(uint8_t mode);
 
 /**
+ * @brief Met le SX1280 en sommeil, sans retention (~0,4 uA contre 700 uA
+ *        en STDBY_RC, datasheet). La configuration est perdue : le
+ *        SX1280 se reveille tout seul a la commande SPI suivante, en
+ *        STDBY_RC, et doit etre reconfigure avant d'emettre (les chemins
+ *        d'emission font un reset et une configuration complete).
+ */
+void SX1280_SetSleep(void);
+
+/**
  * @brief Configure le type de paquet
  * @param packetType Type de paquet (GFSK, LoRa, etc.)
  */
@@ -235,12 +245,13 @@ void SX1280_SetRx(uint16_t timeout);
 /**
  * @brief Lit le payload reçu
  * @param buffer Buffer pour recevoir les données
- * @param size Pointeur vers la taille reçue
+ * @param maxSize Taille du buffer : une trame plus longue n'est pas lue
+ * @param size Pointeur vers la taille reçue (taille reelle, meme si > maxSize)
  * @param rssi Pointeur vers le RSSI
  * @param snr Pointeur vers le SNR
  * @return 1 si données reçues, 0 sinon
  */
-uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t *size, int8_t *rssi, int8_t *snr);
+uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t maxSize, uint8_t *size, int8_t *rssi, int8_t *snr);
 
 /**
  * @brief Lit le status des IRQ

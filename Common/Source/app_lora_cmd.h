@@ -93,6 +93,25 @@
 /* Fenetre de reception ouverte apres chaque TX de donnees */
 #define LORA_CMD_RX_WINDOW_MS       300
 
+/* Fenetre ecourtee quand rien n'arrive.
+ *
+ * Le ZLinky ecoute apres chaque trame de donnees, presque toujours pour
+ * rien, a ~6 mA (SX1280 en RX, BW 406 kHz). Or la box repond 20 ms apres
+ * la trame montante, avec un preambule allonge d'environ 40 ms (16250 >> SF
+ * symboles, 8 au minimum). En LoRa, le SX1280 ne signale pas la detection
+ * d'un preambule (IRQ PreambleDetected : GFSK seulement), mais il signale
+ * l'en-tete (HeaderValid). Si aucun en-tete n'est apparu a l'instant ou
+ * celui d'une requete de la box serait deja passe, la fenetre est fermee.
+ *
+ * Echeance = delai de la box + preambule + 4,25 symboles de synchro
+ * + 8 symboles d'en-tete + marge. Avec la fenetre de 300 ms comme plafond :
+ *   SF12 ~254 ms   SF11 ~152 ms   SF10 ~118 ms   SF9 ~104 ms
+ * Si un en-tete est vu, la fenetre complete reste ouverte. */
+#define LORA_CMD_BOX_DELAY_MS          20
+#define LORA_CMD_BOX_PREAMBLE_US       40000  /* 16250 >> SF symboles ~ 40 ms */
+#define LORA_CMD_BOX_PREAMBLE_MIN_SYM  8
+#define LORA_CMD_HEADER_MARGIN_MS      30
+
 /****************************************************************************/
 /***        Exported Functions                                            ***/
 /****************************************************************************/

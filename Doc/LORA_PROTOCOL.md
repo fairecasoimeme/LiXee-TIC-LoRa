@@ -144,7 +144,18 @@ L'appairage se fait sur un **rendez-vous fixe : canal 3 + SF11**, quelle que soi
 la configuration opérationnelle. C'est ce qui permet à un ZLinky qui tourne en
 SF7/canal 7 de revenir se faire entendre pour renégocier. Le récepteur ouvre une
 fenêtre de 30 s sur ce rendez-vous ; l'émetteur envoie un PAIR_REQUEST toutes les
-300 ms et écoute 200 ms après chaque envoi.
+6 s (recharge de l'alimentation TIC) et écoute 200 ms après chaque envoi.
+
+**Fenêtre côté émetteur** (firmware ≥ 1.1.0) :
+
+| Déclenchement | Durée | À l'expiration sans réponse |
+|---|---|---|
+| Appui long | 60 s | l'appairage précédent est **restauré** (clé, canal, SF) |
+| Premier démarrage, aucune clé | 5 min | l'émetteur passe non appairé, LED éteinte, et attend un appui long |
+
+Un appui long ne détruit plus l'appairage en cours : il est conservé en mémoire
+et en PDM, et n'est remplacé qu'au succès du nouvel appairage. Un appairage
+interrompu, ou capté par une autre box, ne laisse donc plus l'émetteur sans clé.
 
 > ⚠️ **Le SF du rendez-vous doit être identique côté récepteur**, sinon plus
 > aucun appairage n'est possible — il n'y a pas de négociation à ce stade.
@@ -218,16 +229,31 @@ type
 
 > Un récepteur ancien lit ses 11 premiers octets et ignore la queue — pas de casse.
 
-### 4.2 PAIR_RESPONSE — box → device (21 octets)
+### 4.2 PAIR_RESPONSE — box → device (21 octets, ou 29 adressée)
 
 | Offset | Taille | Champ |
 |---|---|---|
 | 0 | 1 | `0x14` (type PAIR_RESPONSE) |
-| 1 | 1 | seq |
+| 1 | 1 | seq — **écho obligatoire** du seq de la PAIR_REQUEST à laquelle on répond |
 | 2 | 16 | **clé AES-128** (⚠️ en clair sur l'air) |
 | 18 | 1 | status (`0x00` = OK) |
 | 19 | 1 | **op_channel** (0..7) — canal assigné pour les données |
 | 20 | 1 | **op_SF** (7..12) — spreading factor assigné pour les données |
+| 21 | 8 | **optionnel** — MAC de l'émetteur visé (big-endian, recopié de la PAIR_REQUEST) |
+
+**Filtrage côté émetteur** (firmware ≥ 1.1.0). Tous les émetteurs et toutes
+les box partagent le même rendez-vous, et rien d'autre n'identifie le
+destinataire d'une réponse. L'émetteur ignore donc une PAIR_RESPONSE :
+
+- dont le `seq` n'est pas celui de **sa dernière** PAIR_REQUEST (le seq de
+  départ est tiré au hasard à chaque entrée en appairage) ;
+- qui fait **au moins 29 octets** et dont le MAC en `[21..28]` n'est pas le sien.
+
+Le récepteur **devrait envoyer le format adressé de 29 octets** : c'est la
+seule protection fiable quand deux émetteurs sont en appairage en même temps.
+Un firmware antérieur à 1.1.0 n'accepte que 20 ou 21 octets et refuserait
+cette trame : ne passer au format 29 octets qu'une fois les émetteurs à jour,
+ou envoyer 21 octets aux émetteurs dont la version (POLL `0xFF01`) est inconnue.
 
 Si `op_channel` est hors plage, l'émetteur retombe sur `PAIR_CHANNEL` (3). Si
 `op_SF` est hors plage, il retombe sur **SF11**.
@@ -268,6 +294,45 @@ plutôt que de se retrouver appairé sur une config muette.
 
 Le récepteur recalcule la preuve avec la clé qu'il a générée : si ça matche,
 le device connaît bien la clé → appairage validé.
+
+**Puissance d'émission** (firmware ≥ 1.1.4 ; puissance de la box corrigée en 1.1.5). La PAIR_REQUEST part à +10 dBm.
+Le ZLinky mesure ensuite le RSSI de la PAIR_RESPONSE, en déduit la perte de
+trajet sachant que la box émet à +10 dBm, et règle sa puissance pour
+arriver à la box vers −90 dBm, entre 0 et +10 dBm. Cette puissance s'applique
+à la PAIR_CONFIRM et à toutes les trames suivantes (données, POLL, OTA), et
+elle est mémorisée avec l'appairage. Un ZLinky proche de la box émet donc à
+0 dBm, un ZLinky éloigné reste à +10 dBm.
+
+| Signal de la box reçu par le ZLinky | Puissance du ZLinky |
+|---|---|
+| −80 dBm ou plus fort | 0 dBm |
+| −85 dBm | +5 dBm |
+| −90 dBm ou plus faible | +10 dBm |
+
+> **Si la puissance d'émission de la box change**, il faut mettre à jour
+> `LORA_BOX_TX_POWER_ASSUMED_DBM` (`app_lora_pair.h`) : une box qui émettrait
+> plus fort ferait émettre le ZLinky trop faiblement.
+
+**Calendrier d'émission** (firmware ≥ 1.1.1). Le ZLinky enchaîne PAIR_REQUEST,
+réception de la PAIR_RESPONSE et PAIR_CONFIRM : sur un compteur faible, une
+PAIR_CONFIRM émise aussitôt part sur une réserve vide et arrive tronquée
+(erreur CRC) ou pas du tout. Le ZLinky laisse donc la réserve se recharger, et
+émet **deux fois la même PAIR_CONFIRM** (même `seq`) :
+
+| Émission | Début, compté depuis la réception de la PAIR_RESPONSE |
+|---|---|
+| 1re PAIR_CONFIRM | **1,7 s** |
+| 2e PAIR_CONFIRM | **3,0 s** |
+
+La seconde se termine avant 3,4 s, même à SF12 (~360 ms pour 15 octets).
+
+Côté récepteur :
+
+- **attendre la PAIR_CONFIRM au moins 4 s** après la fin de la PAIR_RESPONSE ;
+- **ignorer une PAIR_CONFIRM supplémentaire** une fois l'appairage validé ;
+- un délai d'attente plus long (6 s par exemple) permettrait au ZLinky de
+  laisser davantage de temps de recharge, au prix d'une fenêtre plus longue
+  pendant laquelle le récepteur n'écoute plus le rendez-vous.
 
 ---
 
@@ -796,7 +861,23 @@ Chronologie dans la fenêtre :
 | T+5 ms | ZLinky en RX (restauration IRQ DIO1 + `payloadLength`) |
 | T+20 ms | récepteur a déchiffré, consulté sa file, démarre son TX |
 | T+60 ms | préambule détecté par le ZLinky |
-| T+300 ms | fenêtre fermée, retour en standby |
+| T+300 ms | fenêtre fermée, radio en sommeil |
+
+**Fermeture anticipée** (firmware ≥ 1.1.3). Si aucun en-tête LoRa n'a été
+reçu à l'instant où celui d'une requête aurait dû arriver, le ZLinky ferme la
+fenêtre sans attendre les 300 ms. L'échéance suppose que la box commence à
+émettre **au plus 20 ms** après la fin de la trame montante, avec un préambule
+d'environ 40 ms (`16250 >> SF` symboles, 8 au minimum) :
+
+| SF opérationnel | 12 | 11 | 10 | 9 |
+|---|---|---|---|---|
+| Fermeture anticipée à | ~254 ms | ~152 ms | ~118 ms | ~104 ms |
+
+Ces valeurs comptent 30 ms de marge. **Si la box répond plus tard, ou avec
+un préambule plus long, ses requêtes seront perdues** : toute évolution de
+ce délai côté box doit être répercutée ici (`LORA_CMD_BOX_*` dans
+`app_lora_cmd.h`). Le SX1280 ne signale pas la détection d'un préambule en
+LoRa : seul l'en-tête permet de savoir qu'une trame arrive.
 
 > **Pourquoi une fenêtre et pas une écoute permanente** : le SX1280 tire
 > ~7-10 mA en RX contre ~0,6 mA en standby. Écouter en permanence coûterait

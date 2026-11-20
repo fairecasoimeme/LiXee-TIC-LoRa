@@ -68,6 +68,10 @@
 /****************************************************************************/
 PRIVATE bool_t bDIO1State = FALSE;
 PRIVATE uint32 u32BlinkTickTime = 0;
+
+/* Duree d'allumage de chaque flash (ms). 100 ms par defaut ; l'appairage la
+ * reduit pour economiser la reserve d'energie (cf. vSetBlinkOnTime). */
+PRIVATE uint32 u32LedOnMs = 100;
 PRIVATE uint32 u32LoopTime = 0;
 
 /****************************************************************************/
@@ -131,8 +135,23 @@ PUBLIC void vStartBlinkTimer(uint32 u32Ticks)
     GPIO_PinWrite(GPIO, 0, 10, 1); //ON
     bDIO1State=FALSE;
     ZTIMER_eStop(u8TimerLedON);
-    ZTIMER_eStart(u8TimerLedON, ZTIMER_TIME_MSEC(100));
+    ZTIMER_eStart(u8TimerLedON, ZTIMER_TIME_MSEC(u32LedOnMs));
     ZTIMER_eStart(u8TimerBlink, ZTIMER_TIME_MSEC(u32Ticks));
+}
+
+/****************************************************************************
+ *
+ * NAME: vSetBlinkOnTime
+ *
+ * DESCRIPTION:
+ * Regle la duree d'allumage de chaque flash, prise en compte au prochain
+ * vStartBlinkTimer. La LED est alimentee par la meme reserve que la radio :
+ * pendant l'appairage, des flashs tres courts laissent l'energie a la radio.
+ *
+ ****************************************************************************/
+PUBLIC void vSetBlinkOnTime(uint32 u32OnMs)
+{
+    u32LedOnMs = u32OnMs;
 }
 
 /****************************************************************************

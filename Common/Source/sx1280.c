@@ -29,6 +29,15 @@ void SX1280_SetStandby(uint8_t mode)
     SX1280_HAL_WriteCommand(SX1280_CMD_SET_STANDBY, &mode, 1);
 }
 
+void SX1280_SetSleep(void)
+{
+    /* SetSleep n'est accepte qu'en STDBY */
+    SX1280_SetStandby(SX1280_STANDBY_RC);
+    uint8_t u8SleepConfig = 0x00;   /* aucune retention */
+    SX1280_HAL_WriteCommandNoWait(SX1280_CMD_SET_SLEEP, &u8SleepConfig, 1);
+    SX1280_HAL_MarkAsleep();
+}
+
 void SX1280_SetPacketType(uint8_t packetType)
 {
     SX1280_HAL_WriteCommand(SX1280_CMD_SET_PACKET_TYPE, &packetType, 1);
@@ -243,7 +252,7 @@ void SX1280_SetRx(uint16_t timeout)
     SX1280_HAL_WriteCommand(SX1280_CMD_SET_RX, buf, 3);
 }
 
-uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t *size, int8_t *rssi, int8_t *snr)
+uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t maxSize, uint8_t *size, int8_t *rssi, int8_t *snr)
 {
     uint8_t status[2];
     uint8_t packetStatus[5];
@@ -253,16 +262,21 @@ uint8_t SX1280_GetRxPayload(uint8_t *buffer, uint8_t *size, int8_t *rssi, int8_t
     *size = status[0];
     uint8_t offset = status[1];
 
-    // Lecture du payload
-    if(*size > 0 && *size <= 255)
+    // Lecture du payload, bornee a la taille du buffer de l'appelant.
+    // Tous les emetteurs et toutes les box partagent le meme canal : une trame
+    // d'un voisin (EXTENDED de 24 octets, bloc OTA de 70 octets) peut arriver
+    // pendant une fenetre RX prevue pour 8 octets. La copier entiere ecraserait
+    // la pile. Une trame trop longue n'est pas lue : *size garde sa taille
+    // reelle (> maxSize) pour que l'appelant la rejette.
+    if (*size == 0)
     {
-        SX1280_HAL_ReadBuffer(offset, buffer, *size);
-    }
-    else
-    {
-        *size = 0;
         return 0;
     }
+    if (*size > maxSize)
+    {
+        return 0;
+    }
+    SX1280_HAL_ReadBuffer(offset, buffer, *size);
 
     // Lecture du packet status (RSSI, SNR)
     SX1280_HAL_ReadCommand(SX1280_CMD_GET_PACKET_STATUS, packetStatus, 5);

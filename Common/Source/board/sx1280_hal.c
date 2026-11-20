@@ -542,8 +542,31 @@ void SX1280_HAL_Reset(void)
     PRINTF("=== END RAW SPI TEST ===\r\n\r\n");
 }
 
+/* TRUE apres SX1280_SetSleep : la prochaine commande doit d'abord reveiller
+ * le SX1280 (cf. SX1280_HAL_MarkAsleep). */
+static volatile uint8_t s_u8Asleep = 0;
+
+void SX1280_HAL_MarkAsleep(void)
+{
+    s_u8Asleep = 1;
+}
+
 uint8_t SX1280_HAL_WaitOnBusy(void)
 {
+    /* Reveil automatique : en sommeil, BUSY reste HAUT tant que rien ne
+     * reveille le SX1280, et toute commande partirait dans le vide apres
+     * ~10 ms d'attente. Un front descendant sur NSS le reveille (datasheet
+     * section 9.3.2) ; il redemarre en STDBY_RC, configuration perdue (sommeil
+     * sans retention). Les chemins d'emission refont de toute facon un
+     * reset et une configuration complete. */
+    if (s_u8Asleep)
+    {
+        s_u8Asleep = 0;
+        GPIO_PinWrite(GPIO, SX1280_GPIO_PORT, SX1280_NSS_PIN, 0);
+        for (volatile uint32_t i = 0; i < 100; i++);
+        GPIO_PinWrite(GPIO, SX1280_GPIO_PORT, SX1280_NSS_PIN, 1);
+    }
+
     /*
      * Attend que le SX1280 finisse de traiter la commande precedente.
      *
@@ -614,7 +637,21 @@ static void SX1280_HAL_SpiTransfer(uint8_t *txData, uint8_t *rxData, uint16_t to
     SPI_MasterTransferBlocking(SX1280_SPI_INSTANCE, &xfer);
 }
 
+static void vHalWriteCommand(uint8_t cmd, uint8_t *buffer, uint16_t size, uint8_t u8WaitAfter);
+
 void SX1280_HAL_WriteCommand(uint8_t cmd, uint8_t *buffer, uint16_t size)
+{
+    vHalWriteCommand(cmd, buffer, size, 1);
+}
+
+/* Variante sans attente de BUSY apres la commande : pour SetSleep, apres
+ * laquelle BUSY reste HAUT tant que le SX1280 dort. */
+void SX1280_HAL_WriteCommandNoWait(uint8_t cmd, uint8_t *buffer, uint16_t size)
+{
+    vHalWriteCommand(cmd, buffer, size, 0);
+}
+
+static void vHalWriteCommand(uint8_t cmd, uint8_t *buffer, uint16_t size, uint8_t u8WaitAfter)
 {
     uint16_t totalSize = 1 + size;
 
@@ -665,7 +702,10 @@ void SX1280_HAL_WriteCommand(uint8_t cmd, uint8_t *buffer, uint16_t size)
      * et etre ignoree par le SX1280.
      */
     for(volatile uint32_t d = 0; d < 50; d++); /* ~1us */
-    SX1280_HAL_WaitOnBusy();
+    if (u8WaitAfter)
+    {
+        SX1280_HAL_WaitOnBusy();
+    }
 }
 
 void SX1280_HAL_ReadCommand(uint8_t cmd, uint8_t *buffer, uint16_t size)

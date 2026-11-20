@@ -39,6 +39,12 @@
 #define LORA_PAIR_REQUEST_SIZE         LORA_PAIR_REQUEST_BASE_SIZE  /* legacy alias */
 #define LORA_PAIR_RESPONSE_SIZE        21  /* type+seq+key(16)+status+op_channel+op_SF */
 #define LORA_PAIR_RESPONSE_SIZE_LEGACY 20  /* sans op_SF — receivers < v2.23 → SF11 par defaut */
+/* PAIR_RESPONSE adressee (protocole v2) : MAC de l'emetteur vise en [21..28].
+ * L'emetteur verifie que c'est le sien. Toute longueur >= 21 est acceptee ;
+ * la verification du MAC s'applique des que la trame fait au moins 29 octets
+ * (les octets suivants sont reserves a une evolution, ex. identifiant de box). */
+#define LORA_PAIR_RESPONSE_MAC_OFFSET  21
+#define LORA_PAIR_RESPONSE_SIZE_V2     (LORA_PAIR_RESPONSE_MAC_OFFSET + 8)
 #define LORA_PAIR_CONFIRM_SIZE         15  /* type+seq+MAC(8)+proof(4)+status */
 
 /* Rendez-vous d'appairage : FIXE, independant de la config operationnelle.
@@ -110,8 +116,19 @@
 /* Magic value to validate PDM record */
 #define LORA_PAIR_MAGIC                0x4C505249  /* "LPRI" */
 
-/* Pairing timeout (30 seconds) */
-#define LORA_PAIR_TIMEOUT_MS           30000
+/* Duree maximale d'une fenetre d'appairage cote emetteur.
+ *
+ * Un emetteur qui reste indefiniment en appairage finit par accepter la
+ * PAIR_RESPONSE de la premiere box qui ouvre son propre appairage, meme si
+ * elle repond a un autre emetteur : il prend alors une cle que sa box ne
+ * connait pas et semble « desappaire ». La fenetre est donc bornee :
+ *   - appui long : 60 s, le temps d'ouvrir l'appairage sur la box ;
+ *   - premier demarrage sans cle : 5 min, le temps d'aller jusqu'a la box.
+ * A l'expiration, un emetteur deja appaire reprend son appairage precedent
+ * (cle, canal, SF) ; un emetteur sans cle repasse non appaire, LED eteinte,
+ * et attend un appui long. */
+#define LORA_PAIR_WINDOW_BUTTON_MS     60000
+#define LORA_PAIR_WINDOW_BOOT_MS       300000
 
 /* Intervalle entre deux PAIR_REQUEST = temps de RECHARGE du supercap
  * avant chaque tentative.
@@ -128,15 +145,48 @@
  * D'ou 6000 ms : on donne a chaque PAIR_REQUEST une recharge superieure
  * a celle des donnees, qui passent deja partiellement.
  *
- * Le cout est nul en nombre d'essais : contrairement a ce que suggere
- * LORA_PAIR_TIMEOUT_MS (defini mais JAMAIS utilise), l'emetteur reessaie
- * indefiniment jusqu'a etre appaire -- les 30 s sont la fenetre du
- * RECEPTEUR. Et l'appairage n'a besoin que d'UN succes, contrairement
- * aux donnees ou chaque echec est une trame perdue. */
+ * Le cout en nombre d'essais reste faible : 10 essais sur la fenetre de
+ * 60 s d'un appui long (cf. LORA_PAIR_WINDOW_BUTTON_MS), et l'appairage
+ * n'a besoin que d'UN succes, contrairement aux donnees ou chaque echec
+ * est une trame perdue. */
 #define LORA_PAIR_TX_INTERVAL_MS       6000
 
 /* RX listen window after each PAIR_REQUEST (200ms) */
 #define LORA_PAIR_RX_TIMEOUT_MS        200
+
+/* Duree d'emission maximale d'une PAIR_RESPONSE (29 octets a SF11 : ~255 ms).
+ * La fenetre ci-dessus borne la DETECTION de la reponse ; une reponse detectee
+ * juste avant la fin de la fenetre se termine jusqu'a cette duree plus tard.
+ * L'attente logicielle couvre donc les deux, sinon on abandonnait une reponse
+ * en cours de reception. */
+#define LORA_PAIR_RESPONSE_MAX_AIRTIME_MS  300
+
+/* PAIR_CONFIRM : recharge de l'alimentation, puis deux emissions.
+ *
+ * Le ZLinky enchaine PAIR_REQUEST, reception de la PAIR_RESPONSE et
+ * PAIR_CONFIRM. Emise ~0,65 s apres la reponse, la PAIR_CONFIRM partait
+ * sur une reserve vide sur les compteurs faibles : la box la recevait
+ * tronquee (erreur CRC) ou pas du tout (mesure sur un triphase).
+ *
+ * Les instants sont comptes depuis la reception de la PAIR_RESPONSE. La box
+ * (v3.3) attend la PAIR_CONFIRM 4 s apres la fin de sa reponse ; la seconde
+ * emission doit donc se terminer avant ~3,5 s, y compris a SF12 (~360 ms
+ * pour 15 octets) : 3000 + 360 = 3360 ms.
+ *
+ * La seconde emission rattrape une premiere coupee par une chute de tension.
+ * Elle est identique (meme seq) ; la box ignore une PAIR_CONFIRM en trop. */
+#define LORA_PAIR_CONFIRM_FIRST_MS     1700
+#define LORA_PAIR_CONFIRM_SECOND_MS    3000
+#define LORA_PAIR_CONFIRM_COUNT        2
+
+/* LED pendant l'appairage. Elle puise dans la meme reserve que la radio :
+ * avant, elle restait allumee 40 % (demarrage) a 67 % (appui long) du temps,
+ * et clignotait aussi pendant l'echange. Desormais : un flash de 20 ms toutes
+ * les 500 ms entre deux tentatives (~4 % du temps), et LED eteinte de
+ * l'emission de la PAIR_REQUEST a la fin de la derniere PAIR_CONFIRM. */
+#define LORA_PAIR_LED_PERIOD_MS        500
+#define LORA_PAIR_LED_FLASH_MS         20
+#define LORA_LED_FLASH_DEFAULT_MS      100   /* flash hors appairage */
 
 /* Puissance d'emission pendant l'appairage uniquement (dBm).
  *
@@ -152,6 +202,33 @@
  * Ce define reste un point de reglage si une installation resistait
  * malgre le SF10. */
 #define LORA_PAIR_TX_POWER_DBM         10
+
+/* Puissance d'emission adaptee au lien.
+ *
+ * Le ZLinky mesure le RSSI de la PAIR_RESPONSE et en deduit la perte de
+ * trajet, en supposant que la box emet a LORA_BOX_TX_POWER_ASSUMED_DBM.
+ * Il choisit ensuite la puissance qui ferait arriver ses trames a la box
+ * vers LORA_LINK_TARGET_RSSI_DBM, soit ~30 dB au-dessus de la limite de
+ * reception (~-120 dBm a SF11) : marge pour les evanouissements, les
+ * obstacles qui bougent et l'imprecision du RSSI.
+ *
+ *   puissance = cible + (puissance box - RSSI recu), bornee [MIN, MAX]
+ *
+ * Exemples : RSSI -58 dBm → 0 dBm ; -85 dBm → +5 dBm ; -90 dBm ou moins → +10.
+ *
+ * La LiXee-Box emet a +10 dBm (valeur donnee par son developpeur). Si une
+ * box emettait plus fort, le ZLinky sous-estimerait la perte de trajet et
+ * emettrait trop faiblement : la marge en absorberait une partie.
+ *
+ * Le compteur ne bouge pas : la valeur est calculee a l'appairage et
+ * memorisee avec lui. La PAIR_REQUEST, premiere trame de l'echange, part
+ * toujours a LORA_PAIR_TX_POWER_DBM ; la PAIR_CONFIRM et toutes les
+ * trames suivantes (donnees, POLL, OTA) a la puissance adaptee. */
+#define LORA_TX_POWER_MIN_DBM          0
+#define LORA_TX_POWER_MAX_DBM          10    /* limite ETSI EN 300 440 */
+#define LORA_BOX_TX_POWER_ASSUMED_DBM  10
+#define LORA_LINK_TARGET_RSSI_DBM      (-90)
+#define LORA_TX_POWER_CODE_OFFSET      64    /* code PDM = dBm + 64 ; 0 = non renseigne */
 
 /* LED patterns */
 #define LORA_LED_UNPAIRED_PERIOD_MS    200   /* Fast blink 5Hz */
@@ -195,7 +272,7 @@ typedef struct {
     uint8   u8OpChannel;                /* Operational channel (0..7), assigned by RX at pairing */
     uint8   u8SpreadingFactor;          /* SF 7..12 ; 0 = non renseigne → defaut */
     uint8   u8TxIntervalSec;            /* Intervalle TX en s ; 0 = non renseigne → defaut */
-    uint8   u8Reserved;                 /* alignement / usage futur */
+    uint8   u8TxPowerCode;              /* puissance TX : dBm + LORA_TX_POWER_CODE_OFFSET ; 0 = non renseigne → max */
 } tsLoraPairingData;
 
 /* Bornes et defauts de la config radio (negociee a l'appairage) */
@@ -253,6 +330,13 @@ PUBLIC uint8 APP_u8LoraPairGetOpChannel(void);
  */
 PUBLIC uint8 APP_u8LoraPairGetSF(void);
 PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void);
+
+/**
+ * @brief Puissance d'emission adaptee au lien (cf. LORA_TX_POWER_*). Retourne
+ *        LORA_TX_POWER_MAX_DBM si elle n'a pas ete mesuree (appairage
+ *        anterieur a la 1.1.4).
+ */
+PUBLIC int8 APP_i8LoraPairGetTxPowerDbm(void);
 
 /**
  * @brief Applique une valeur de config en RAM. Utilise pendant le handshake
