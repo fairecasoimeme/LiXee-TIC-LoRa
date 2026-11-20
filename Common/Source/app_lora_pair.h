@@ -179,6 +179,15 @@
 #define LORA_PAIR_CONFIRM_SECOND_MS    3000
 #define LORA_PAIR_CONFIRM_COUNT        2
 
+/* LED pendant l'appairage. Elle puise dans la meme reserve que la radio :
+ * avant, elle restait allumee 40 % (demarrage) a 67 % (appui long) du temps,
+ * et clignotait aussi pendant l'echange. Desormais : un flash de 20 ms toutes
+ * les 500 ms entre deux tentatives (~4 % du temps), et LED eteinte de
+ * l'emission de la PAIR_REQUEST a la fin de la derniere PAIR_CONFIRM. */
+#define LORA_PAIR_LED_PERIOD_MS        500
+#define LORA_PAIR_LED_FLASH_MS         20
+#define LORA_LED_FLASH_DEFAULT_MS      100   /* flash hors appairage */
+
 /* Puissance d'emission pendant l'appairage uniquement (dBm).
  *
  * On reste a +10 dBm, comme les donnees : le Linky n'est pas mobile,

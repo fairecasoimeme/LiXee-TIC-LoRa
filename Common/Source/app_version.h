@@ -35,7 +35,7 @@
 
 #define APP_VERSION_MAJOR   1    /* 0..255 */
 #define APP_VERSION_MINOR   1    /* 0..15  */
-#define APP_VERSION_PATCH   1    /* 0..15  */
+#define APP_VERSION_PATCH   2    /* 0..15  */
 
 /* Version sur 16 bits : 0xMMmp (MM = majeur, m = mineur, p = correctif).
  * Lisible directement en hexadecimal : 1.2.3 -> 0x0123.

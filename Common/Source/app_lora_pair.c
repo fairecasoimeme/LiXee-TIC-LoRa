@@ -76,8 +76,6 @@ extern uint8_t wdt_update_count;
 /* DIO1 pour poll RX_DONE */
 #define LORA_DIO1_PIN       SX1280_DIO1_PIN
 
-/* Cadence de clignotement LED pendant les boucles de poll d'appairage (ms) */
-#define LORA_PAIR_POLL_LED_MS  150
 
 /* Protocol version */
 #define LORA_TIC_PROTOCOL_VERSION_PAIR  0x01
@@ -130,12 +128,12 @@ PRIVATE void vErasePairingFromPDM(void);
 PRIVATE void vReadMAC(uint8 *pu8MAC);
 PRIVATE void vSendPairRequest(void);
 PRIVATE bool_t bListenForPairResponse(void);
-PRIVATE void vSendPairConfirm(uint8 u8Seq);
+PRIVATE bool_t bSendPairConfirm(uint8 u8Seq);
 PRIVATE void vSendPairConfirms(void);
 PRIVATE void vPairWaitUntil(uint32 u32TargetMs);
 PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
 PRIVATE void vPollLedBlink(void);
-PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs);
+PRIVATE void vStartPairingWindow(uint32 u32WindowMs);
 PRIVATE void vEndPairingWindow(void);
 
 
@@ -144,27 +142,18 @@ PRIVATE void vEndPairingWindow(void);
  * NAME: vPollLedBlink
  *
  * DESCRIPTION:
- * Anime la LED (clignotement ~150 ms) pendant les boucles de poll DIO1
- * de l'appairage. Ces boucles s'executent dans le callback timer
- * APP_cbTimerLoraPair et bloquent ~450-550 ms par tick : on ne peut donc
- * PAS appeler ZTIMER_vTask() (reentrance interdite, cf. vSendPairRequest),
- * et laisser tourner les timers de blink ZTIMER donnerait une LED figee
- * puis un flash instantane au rattrapage. On pilote donc la LED en direct,
- * sur base de l'horloge ms, sans toucher a ZTIMER.
+ * Appelee dans les boucles d'attente de l'echange d'appairage (callback
+ * APP_cbTimerLoraPair, ZTIMER_vTask() interdit). Ces boucles bloquent les
+ * timers de blink : la LED est donc pilotee ici en direct, et maintenue
+ * eteinte pour laisser toute la reserve d'energie a la radio.
  *
  ****************************************************************************/
 PRIVATE void vPollLedBlink(void)
 {
-    static uint32 u32LastToggleMs = 0;
-    static bool_t bLedOn = TRUE;
-
-    uint32 u32NowMs = OSA_TimeGetMsec();
-    if ((uint32)(u32NowMs - u32LastToggleMs) >= LORA_PAIR_POLL_LED_MS)
-    {
-        u32LastToggleMs = u32NowMs;
-        bLedOn = !bLedOn;
-        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, LORA_LED_PIN, bLedOn ? 1 : 0);
-    }
+    /* LED eteinte pendant tout l'echange (PAIR_REQUEST -> PAIR_CONFIRM) :
+     * elle puise dans la meme reserve que la radio (cf. LORA_PAIR_LED_*).
+     * Les flashs reprennent entre deux tentatives, via le timer de blink. */
+    GPIO_PinWrite(GPIO, LORA_GPIO_PORT, LORA_LED_PIN, 0);
 }
 
 
@@ -228,8 +217,7 @@ PUBLIC void APP_vLoraPairInit(void)
         DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: Not paired — auto-entering PAIRING mode on ch %d (%lu s)\r\n",
                     LORA_PAIR_CHANNEL, (uint32)(LORA_PAIR_WINDOW_BOOT_MS / 1000));
 
-        /* LED fast blink (250ms period: 100ms ON + 150ms OFF → visible 4Hz) */
-        vStartPairingWindow(LORA_PAIR_WINDOW_BOOT_MS, 250);
+        vStartPairingWindow(LORA_PAIR_WINDOW_BOOT_MS);
     }
 }
 
@@ -269,8 +257,7 @@ PUBLIC void APP_vLoraPairOnButton(APP_teEventType eEvent)
             bHasPrevPairing = TRUE;
         }
 
-        /* LED fast blink (150ms) for pairing mode */
-        vStartPairingWindow(LORA_PAIR_WINDOW_BUTTON_MS, 150);
+        vStartPairingWindow(LORA_PAIR_WINDOW_BUTTON_MS);
         return;
     }
 
@@ -452,6 +439,7 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
 
         /* Switch LED from fast pairing blink to default TIC blink (3s)
          * App_Linky will adjust to 1s if TIC error */
+        vSetBlinkOnTime(LORA_LED_FLASH_DEFAULT_MS);
         vStartBlinkTimer(3000);
 
         /* Start TIC acquisition + LoRa data TX */
@@ -512,7 +500,7 @@ PUBLIC void APP_vLoraPairErase(void)
  * seq et ne pouvaient pas distinguer leurs reponses (cf. u8LastReqSeq).
  *
  ****************************************************************************/
-PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs)
+PRIVATE void vStartPairingWindow(uint32 u32WindowMs)
 {
     ePairState = LORA_PAIR_PAIRING;
     u8PairTickCount = 0;
@@ -527,8 +515,14 @@ PRIVATE void vStartPairingWindow(uint32 u32WindowMs, uint32 u32BlinkMs)
      * On se contente de pointer la frequence sur le canal d'appairage. */
     APP_vLoraChannelSet(LORA_PAIR_CHANNEL);
 
-    vStartBlinkTimer(u32BlinkMs);
+    vSetBlinkOnTime(LORA_PAIR_LED_FLASH_MS);
+    vStartBlinkTimer(LORA_PAIR_LED_PERIOD_MS);
 
+    /* La premiere PAIR_REQUEST part apres un intervalle complet : la reserve
+     * se recharge d'abord, que l'on vienne d'un appui long ou d'un
+     * demarrage (de meme entre deux tentatives). */
+    DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: first PAIR_REQUEST in %d ms (recharge)\r\n",
+                LORA_PAIR_TX_INTERVAL_MS);
     ZTIMER_eStart(u8TimerLoraPair, ZTIMER_TIME_MSEC(LORA_PAIR_TX_INTERVAL_MS));
 }
 
@@ -557,6 +551,7 @@ PRIVATE void vEndPairingWindow(void)
             sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
 
         APP_vLoraChannelSet(APP_u8LoraPairGetOpChannel());
+        vSetBlinkOnTime(LORA_LED_FLASH_DEFAULT_MS);
         vStartBlinkTimer(3000);
         APP_vLoRaTicStart();
     }
@@ -564,6 +559,8 @@ PRIVATE void vEndPairingWindow(void)
     {
         ePairState = LORA_PAIR_UNPAIRED;
         vStopBlinkTimer();
+        vSetBlinkOnTime(LORA_LED_FLASH_DEFAULT_MS);
+        GPIO_PinWrite(GPIO, LORA_GPIO_PORT, LORA_LED_PIN, 0);   /* LED eteinte */
 
         DBG_vPrintf(TRACE_LORA_PAIR,
             "LORA_PAIR: pairing window expired, not paired — long press to retry\r\n");
@@ -946,7 +943,7 @@ PRIVATE bool_t bListenForPairResponse(void)
  *   [14]    status 0x00 = OK
  *
  ****************************************************************************/
-PRIVATE void vSendPairConfirm(uint8 u8Seq)
+PRIVATE bool_t bSendPairConfirm(uint8 u8Seq)
 {
     uint8 au8Pkt[LORA_PAIR_CONFIRM_SIZE];
 
@@ -982,7 +979,9 @@ PRIVATE void vSendPairConfirm(uint8 u8Seq)
 
     PRINTF("[CONF] step 1: enter (switching to op_channel=%d SF%d)\r\n",
            sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
-    g_u8SX1280_HalSilent = 0;  /* DEBUG: keep SPI traces visible */
+    /* Traces SPI coupees : affichees, elles retardaient la PAIR_CONFIRM de
+     * plusieurs centaines de ms et faussaient son calendrier. */
+    g_u8SX1280_HalSilent = 1;
 
     /* Reconfig complete sur la config OPERATIONNELLE (canal + SF) assignee par
      * le recepteur : c'est la qu'il ecoute le CONFIRM. Emettre le CONFIRM sur
@@ -1033,6 +1032,8 @@ PRIVATE void vSendPairConfirm(uint8 u8Seq)
     PRINTF("[CONF] step 7: SetStandby\r\n");
     SX1280_SetStandby(SX1280_STANDBY_RC);
     PRINTF("[CONF] step 8: done, returning\r\n");
+    g_u8SX1280_HalSilent = 0;
+    return bDio1;
 }
 
 /****************************************************************************
@@ -1082,10 +1083,16 @@ PRIVATE void vSendPairConfirms(void)
     for (i = 0; i < LORA_PAIR_CONFIRM_COUNT; i++)
     {
         vPairWaitUntil(u32PairRespMs + au16AtMs[i]);
-        DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: PAIR_CONFIRM %d/%d at t+%lu ms\r\n",
-                    i + 1, LORA_PAIR_CONFIRM_COUNT,
-                    OSA_TimeGetMsec() - u32PairRespMs);
-        vSendPairConfirm(u8Seq);
+        uint32 u32StartMs = OSA_TimeGetMsec() - u32PairRespMs;
+        bool_t bTxDone = bSendPairConfirm(u8Seq);
+        uint32 u32EndMs = OSA_TimeGetMsec() - u32PairRespMs;
+
+        /* Delais comptes depuis la reception de la PAIR_RESPONSE. Calendrier
+         * fixe : debut prevu a LORA_PAIR_CONFIRM_FIRST_MS / SECOND_MS. */
+        DBG_vPrintf(TRACE_LORA_PAIR,
+            "LORA_PAIR: PAIR_CONFIRM %d/%d start t+%lu ms, end t+%lu ms (planned t+%d) %s\r\n",
+            i + 1, LORA_PAIR_CONFIRM_COUNT, u32StartMs, u32EndMs, au16AtMs[i],
+            bTxDone ? "TX_DONE" : "NO TX_DONE");
     }
 }
 

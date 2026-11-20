@@ -12,6 +12,25 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.2 — économie d'énergie pendant l'appairage
+
+Suite des essais de la 1.1.1 sur le triphasé : la recharge avant la
+PAIR_CONFIRM fonctionne, mais certains appairages échouent encore sans que
+la box reçoive rien.
+
+### Appairage
+- LED : un flash de 20 ms toutes les 500 ms entre deux tentatives (environ
+  4 % du temps, contre 40 à 67 % avant), et LED éteinte de la PAIR_REQUEST
+  à la fin de la dernière PAIR_CONFIRM.
+- Traces SPI coupées pendant la PAIR_CONFIRM : leur affichage la retardait
+  de plusieurs centaines de millisecondes.
+
+### Diagnostic
+- Pour chaque PAIR_CONFIRM : début et fin d'émission comptés depuis la
+  réception de la PAIR_RESPONSE, instant prévu, et fin d'émission confirmée
+  ou non par la radio.
+- Délai de recharge avant la première PAIR_REQUEST affiché.
+
 ## 1.1.1 — appairage sur les compteurs à faible énergie
 
 Corrige des appairages qui échouaient sur certains compteurs (constaté sur un
