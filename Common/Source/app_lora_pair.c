@@ -131,7 +131,7 @@ PRIVATE bool_t bListenForPairResponse(void);
 PRIVATE bool_t bSendPairConfirm(uint8 u8Seq);
 PRIVATE void vSendPairConfirms(void);
 PRIVATE void vPairWaitUntil(uint32 u32TargetMs);
-PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF);
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF, int8 i8PowerDbm);
 PRIVATE void vPollLedBlink(void);
 PRIVATE void vStartPairingWindow(uint32 u32WindowMs);
 PRIVATE void vEndPairingWindow(void);
@@ -339,6 +339,15 @@ PUBLIC uint8 APP_u8LoraPairGetSF(void)
     if (u8SF < LORA_SF_MIN || u8SF > LORA_SF_MAX)
         return LORA_SF_DEFAULT;
     return u8SF;
+}
+
+PUBLIC int8 APP_i8LoraPairGetTxPowerDbm(void)
+{
+    int16 i16Power = (int16)sPairingData.u8TxPowerCode - LORA_TX_POWER_CODE_OFFSET;
+    if (sPairingData.u8TxPowerCode == 0 ||
+        i16Power < LORA_TX_POWER_MIN_DBM || i16Power > LORA_TX_POWER_MAX_DBM)
+        return LORA_TX_POWER_MAX_DBM;
+    return (int8)i16Power;
 }
 
 PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void)
@@ -665,7 +674,7 @@ PRIVATE void vReadMAC(uint8 *pu8MAC)
  * TX TIC, pour ne pas dependre de l'etat laisse par un autre module.
  *
  ****************************************************************************/
-PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF)
+PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF, int8 i8PowerDbm)
 {
     /* Reset + config complete sur (canal, SF) : packet type, modulation,
      * sync word, packet params, TX power, puis IRQ TX_DONE sur DIO1. */
@@ -674,7 +683,7 @@ PRIVATE void vReconfigureForPairTx(uint8 u8Channel, uint8 u8SF)
     /* Puissance reduite pour l'appairage : le reconfig ci-dessus applique
      * la puissance des donnees (+10 dBm), on la remplace ici pour limiter
      * le pic de courant du PA (cf. LORA_PAIR_TX_POWER_DBM). */
-    SX1280_SetTxParams(LORA_PAIR_TX_POWER_DBM, SX1280_RAMP_20_US);
+    SX1280_SetTxParams(i8PowerDbm, SX1280_RAMP_20_US);
 
     /* IRQ: TX_DONE + TIMEOUT on DIO1 */
     SX1280_SetDioIrqParams(
@@ -738,7 +747,7 @@ PRIVATE void vSendPairRequest(void)
 
     /* Reconfig complete sur le rendez-vous fixe (canal 3 / SF11), connu des
      * deux cotes independamment de la config operationnelle. */
-    vReconfigureForPairTx(LORA_PAIR_CHANNEL, LORA_PAIR_SF);
+    vReconfigureForPairTx(LORA_PAIR_CHANNEL, LORA_PAIR_SF, LORA_PAIR_TX_POWER_DBM);
 
     /* Send payload */
     SX1280_SendPayload(au8Pkt, u8PktLen);
@@ -931,9 +940,21 @@ PRIVATE bool_t bListenForPairResponse(void)
         APP_bLoraPairSetSF(LORA_SF_DEFAULT);
     }
 
+    /* Puissance d'emission adaptee au lien mesure (cf. LORA_TX_POWER_*) */
+    {
+        int16 i16Power = (int16)LORA_LINK_TARGET_RSSI_DBM
+                       + (int16)LORA_BOX_TX_POWER_ASSUMED_DBM - (int16)i8Rssi;
+        if (i16Power < LORA_TX_POWER_MIN_DBM) i16Power = LORA_TX_POWER_MIN_DBM;
+        if (i16Power > LORA_TX_POWER_MAX_DBM) i16Power = LORA_TX_POWER_MAX_DBM;
+        sPairingData.u8TxPowerCode = (uint8)(i16Power + LORA_TX_POWER_CODE_OFFSET);
+    }
+
     DBG_vPrintf(TRACE_LORA_PAIR,
         "LORA_PAIR: PAIR_RESPONSE received! Key extracted, op_channel=%d op_SF=%d\r\n",
         u8OpCh, APP_u8LoraPairGetSF());
+    DBG_vPrintf(TRACE_LORA_PAIR,
+        "LORA_PAIR: response RSSI=%d dBm SNR=%d dB -> TX power %d dBm\r\n",
+        i8Rssi, i8Snr, APP_i8LoraPairGetTxPowerDbm());
 
     return TRUE;
 }
@@ -997,7 +1018,8 @@ PRIVATE bool_t bSendPairConfirm(uint8 u8Seq)
      * on retente, plutot que de se retrouver appaire sur une config muette. */
     PRINTF("[CONF] step 2: vReconfigureForPairTx(ch=%d SF%d)\r\n",
            sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
-    vReconfigureForPairTx(sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
+    vReconfigureForPairTx(sPairingData.u8OpChannel, APP_u8LoraPairGetSF(),
+                          APP_i8LoraPairGetTxPowerDbm());
     PRINTF("[CONF] step 3: SendPayload(%d bytes)\r\n", LORA_PAIR_CONFIRM_SIZE);
     SX1280_SendPayload(au8Pkt, LORA_PAIR_CONFIRM_SIZE);
     PRINTF("[CONF] step 4: SendPayload returned\r\n");

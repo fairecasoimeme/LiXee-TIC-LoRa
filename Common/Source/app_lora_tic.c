@@ -1601,7 +1601,9 @@ PUBLIC void APP_vLoRaTicReconfigureRadio(uint8 u8Channel, uint8 u8SF)
     /* 11) TX Power +10 dBm, ramp 20us */
     /* +10 dBm : limite ETSI EU (EN 300 440) pour la bande 2.4 GHz ISM.
      * Le SX1280 monte a +13 dBm mais ce serait hors conformite. */
-    SX1280_SetTxParams(LORA_TIC_TX_POWER_DBM, SX1280_RAMP_20_US);
+    /* Puissance adaptee au lien, mesuree a l'appairage (cf. LORA_TX_POWER_*
+     * dans app_lora_pair.h) : +10 dBm au plus. */
+    SX1280_SetTxParams(APP_i8LoraPairGetTxPowerDbm(), SX1280_RAMP_20_US);
 
     /* 12) IRQ : TX_DONE + TIMEOUT sur DIO1 */
     SX1280_SetDioIrqParams(

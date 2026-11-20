@@ -295,6 +295,18 @@ plutôt que de se retrouver appairé sur une config muette.
 Le récepteur recalcule la preuve avec la clé qu'il a générée : si ça matche,
 le device connaît bien la clé → appairage validé.
 
+**Puissance d'émission** (firmware ≥ 1.1.4). La PAIR_REQUEST part à +10 dBm.
+Le ZLinky mesure ensuite le RSSI de la PAIR_RESPONSE, en déduit la perte de
+trajet en supposant que la box émet à +13 dBm, et règle sa puissance pour
+arriver à la box vers −90 dBm, entre 0 et +10 dBm. Cette puissance s'applique
+à la PAIR_CONFIRM et à toutes les trames suivantes (données, POLL, OTA), et
+elle est mémorisée avec l'appairage. Un ZLinky proche de la box émet donc à
+0 dBm, un ZLinky éloigné reste à +10 dBm.
+
+> Si la box émet **plus fort** que +13 dBm (amplificateur externe), le ZLinky
+> sous-estime la perte de trajet et émet trop faiblement : la marge de ~30 dB
+> en absorbe une partie, mais il faut le signaler.
+
 **Calendrier d'émission** (firmware ≥ 1.1.1). Le ZLinky enchaîne PAIR_REQUEST,
 réception de la PAIR_RESPONSE et PAIR_CONFIRM : sur un compteur faible, une
 PAIR_CONFIRM émise aussitôt part sur une réserve vide et arrive tronquée

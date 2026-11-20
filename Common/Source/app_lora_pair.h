@@ -203,6 +203,34 @@
  * malgre le SF10. */
 #define LORA_PAIR_TX_POWER_DBM         10
 
+/* Puissance d'emission adaptee au lien.
+ *
+ * Le ZLinky mesure le RSSI de la PAIR_RESPONSE et en deduit la perte de
+ * trajet, en supposant que la box emet a LORA_BOX_TX_POWER_ASSUMED_DBM.
+ * Il choisit ensuite la puissance qui ferait arriver ses trames a la box
+ * vers LORA_LINK_TARGET_RSSI_DBM, soit ~30 dB au-dessus de la limite de
+ * reception (~-120 dBm a SF11) : marge pour les evanouissements, les
+ * obstacles qui bougent et l'imprecision du RSSI.
+ *
+ *   puissance = cible + (puissance box - RSSI recu), bornee [MIN, MAX]
+ *
+ * Exemples : RSSI -58 dBm → 0 dBm ; -80 dBm → +3 dBm ; -87 dBm ou moins → +10.
+ *
+ * Supposer la box a +13 dBm (maximum du SX1281) est prudent : si elle
+ * emet moins fort, la perte de trajet reelle est plus faible que calculee
+ * et le ZLinky emet un peu plus que necessaire. Une box avec amplificateur
+ * externe consommerait une partie de la marge.
+ *
+ * Le compteur ne bouge pas : la valeur est calculee a l'appairage et
+ * memorisee avec lui. La PAIR_REQUEST, premiere trame de l'echange, part
+ * toujours a LORA_PAIR_TX_POWER_DBM ; la PAIR_CONFIRM et toutes les
+ * trames suivantes (donnees, POLL, OTA) a la puissance adaptee. */
+#define LORA_TX_POWER_MIN_DBM          0
+#define LORA_TX_POWER_MAX_DBM          10    /* limite ETSI EN 300 440 */
+#define LORA_BOX_TX_POWER_ASSUMED_DBM  13
+#define LORA_LINK_TARGET_RSSI_DBM      (-90)
+#define LORA_TX_POWER_CODE_OFFSET      64    /* code PDM = dBm + 64 ; 0 = non renseigne */
+
 /* LED patterns */
 #define LORA_LED_UNPAIRED_PERIOD_MS    200   /* Fast blink 5Hz */
 #define LORA_LED_PAIRING_ON_MS         100   /* Triple flash */
@@ -245,7 +273,7 @@ typedef struct {
     uint8   u8OpChannel;                /* Operational channel (0..7), assigned by RX at pairing */
     uint8   u8SpreadingFactor;          /* SF 7..12 ; 0 = non renseigne → defaut */
     uint8   u8TxIntervalSec;            /* Intervalle TX en s ; 0 = non renseigne → defaut */
-    uint8   u8Reserved;                 /* alignement / usage futur */
+    uint8   u8TxPowerCode;              /* puissance TX : dBm + LORA_TX_POWER_CODE_OFFSET ; 0 = non renseigne → max */
 } tsLoraPairingData;
 
 /* Bornes et defauts de la config radio (negociee a l'appairage) */
@@ -303,6 +331,13 @@ PUBLIC uint8 APP_u8LoraPairGetOpChannel(void);
  */
 PUBLIC uint8 APP_u8LoraPairGetSF(void);
 PUBLIC uint8 APP_u8LoraPairGetTxIntervalSec(void);
+
+/**
+ * @brief Puissance d'emission adaptee au lien (cf. LORA_TX_POWER_*). Retourne
+ *        LORA_TX_POWER_MAX_DBM si elle n'a pas ete mesuree (appairage
+ *        anterieur a la 1.1.4).
+ */
+PUBLIC int8 APP_i8LoraPairGetTxPowerDbm(void);
 
 /**
  * @brief Applique une valeur de config en RAM. Utilise pendant le handshake

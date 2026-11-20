@@ -7,7 +7,7 @@ Le ZLinky est alimenté uniquement par la sortie TIC du compteur, sans pile ni
 alimentation externe. Il vise les installations où le compteur est trop loin
 du logement pour le Zigbee ou le Wi-Fi.
 
-Version courante : **1.1.3** — voir [CHANGELOG.md](CHANGELOG.md).
+Version courante : **1.1.4** — voir [CHANGELOG.md](CHANGELOG.md).
 
 ## Architecture
 
@@ -18,7 +18,7 @@ Compteur Linky --[UART/TIC]--> JN5189 --[SPI]--> SX1280 --[LoRa 2,4 GHz]--> Réc
 | Élément | Détail |
 |---|---|
 | MCU | NXP JN5189 (ARM Cortex-M4) |
-| Radio | Semtech SX1280 / SX1281, 2,4 GHz, +10 dBm |
+| Radio | Semtech SX1280 / SX1281, 2,4 GHz, 0 à +10 dBm selon la distance à la box |
 | Modulation | LoRa SF11, BW 406 kHz, CR 4/5, préambule de 8 symboles |
 | Alimentation | Sortie TIC du Linky (~130 mW disponibles) |
 | Chiffrement | AES-128-CTR + MIC CMAC, clé négociée à l'appairage |

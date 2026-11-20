@@ -12,6 +12,19 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.4 — puissance d'émission adaptée au lien
+
+### Radio
+- À l'appairage, le ZLinky mesure le signal de la PAIR_RESPONSE et en
+  déduit sa puissance d'émission, entre 0 et +10 dBm, pour arriver à la
+  box vers −90 dBm (~30 dB de marge). Un ZLinky proche de la box émet à
+  0 dBm : environ −45 % de courant d'émission (10 mA au lieu de 18 mA
+  pour la puce, datasheet). Un ZLinky éloigné reste à +10 dBm.
+- La PAIR_REQUEST reste à +10 dBm ; la PAIR_CONFIRM, les données, les
+  réponses POLL et l'OTA utilisent la puissance adaptée.
+- Valeur mémorisée avec l'appairage. Un ZLinky appairé avant la 1.1.4
+  reste à +10 dBm jusqu'à son prochain appairage.
+
 ## 1.1.3 — économie d'énergie de la radio
 
 ### Radio
