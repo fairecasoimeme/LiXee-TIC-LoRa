@@ -295,17 +295,23 @@ plutôt que de se retrouver appairé sur une config muette.
 Le récepteur recalcule la preuve avec la clé qu'il a générée : si ça matche,
 le device connaît bien la clé → appairage validé.
 
-**Puissance d'émission** (firmware ≥ 1.1.4). La PAIR_REQUEST part à +10 dBm.
+**Puissance d'émission** (firmware ≥ 1.1.4 ; puissance de la box corrigée en 1.1.5). La PAIR_REQUEST part à +10 dBm.
 Le ZLinky mesure ensuite le RSSI de la PAIR_RESPONSE, en déduit la perte de
-trajet en supposant que la box émet à +13 dBm, et règle sa puissance pour
+trajet sachant que la box émet à +10 dBm, et règle sa puissance pour
 arriver à la box vers −90 dBm, entre 0 et +10 dBm. Cette puissance s'applique
 à la PAIR_CONFIRM et à toutes les trames suivantes (données, POLL, OTA), et
 elle est mémorisée avec l'appairage. Un ZLinky proche de la box émet donc à
 0 dBm, un ZLinky éloigné reste à +10 dBm.
 
-> Si la box émet **plus fort** que +13 dBm (amplificateur externe), le ZLinky
-> sous-estime la perte de trajet et émet trop faiblement : la marge de ~30 dB
-> en absorbe une partie, mais il faut le signaler.
+| Signal de la box reçu par le ZLinky | Puissance du ZLinky |
+|---|---|
+| −80 dBm ou plus fort | 0 dBm |
+| −85 dBm | +5 dBm |
+| −90 dBm ou plus faible | +10 dBm |
+
+> **Si la puissance d'émission de la box change**, il faut mettre à jour
+> `LORA_BOX_TX_POWER_ASSUMED_DBM` (`app_lora_pair.h`) : une box qui émettrait
+> plus fort ferait émettre le ZLinky trop faiblement.
 
 **Calendrier d'émission** (firmware ≥ 1.1.1). Le ZLinky enchaîne PAIR_REQUEST,
 réception de la PAIR_RESPONSE et PAIR_CONFIRM : sur un compteur faible, une

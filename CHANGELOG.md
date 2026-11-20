@@ -12,6 +12,16 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.5 — puissance de la box corrigée
+
+### Radio
+- Le calcul de la puissance d'émission adaptée utilise la puissance réelle
+  de la LiXee-Box, +10 dBm, au lieu des +13 dBm supposés. Le ZLinky passe à
+  0 dBm dès que la box est reçue à −80 dBm ou plus fort, et reste à
+  +10 dBm en dessous de −90 dBm.
+- Comme en 1.1.4, la puissance est calculée à l'appairage : un ZLinky déjà
+  appairé garde sa valeur jusqu'à son prochain appairage.
+
 ## 1.1.4 — puissance d'émission adaptée au lien
 
 ### Radio

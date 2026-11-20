@@ -7,7 +7,7 @@ Le ZLinky est alimenté uniquement par la sortie TIC du compteur, sans pile ni
 alimentation externe. Il vise les installations où le compteur est trop loin
 du logement pour le Zigbee ou le Wi-Fi.
 
-Version courante : **1.1.4** — voir [CHANGELOG.md](CHANGELOG.md).
+Version courante : **1.1.5** — voir [CHANGELOG.md](CHANGELOG.md).
 
 ## Architecture
 

@@ -214,12 +214,11 @@
  *
  *   puissance = cible + (puissance box - RSSI recu), bornee [MIN, MAX]
  *
- * Exemples : RSSI -58 dBm → 0 dBm ; -80 dBm → +3 dBm ; -87 dBm ou moins → +10.
+ * Exemples : RSSI -58 dBm → 0 dBm ; -85 dBm → +5 dBm ; -90 dBm ou moins → +10.
  *
- * Supposer la box a +13 dBm (maximum du SX1281) est prudent : si elle
- * emet moins fort, la perte de trajet reelle est plus faible que calculee
- * et le ZLinky emet un peu plus que necessaire. Une box avec amplificateur
- * externe consommerait une partie de la marge.
+ * La LiXee-Box emet a +10 dBm (valeur donnee par son developpeur). Si une
+ * box emettait plus fort, le ZLinky sous-estimerait la perte de trajet et
+ * emettrait trop faiblement : la marge en absorberait une partie.
  *
  * Le compteur ne bouge pas : la valeur est calculee a l'appairage et
  * memorisee avec lui. La PAIR_REQUEST, premiere trame de l'echange, part
@@ -227,7 +226,7 @@
  * trames suivantes (donnees, POLL, OTA) a la puissance adaptee. */
 #define LORA_TX_POWER_MIN_DBM          0
 #define LORA_TX_POWER_MAX_DBM          10    /* limite ETSI EN 300 440 */
-#define LORA_BOX_TX_POWER_ASSUMED_DBM  13
+#define LORA_BOX_TX_POWER_ASSUMED_DBM  10
 #define LORA_LINK_TARGET_RSSI_DBM      (-90)
 #define LORA_TX_POWER_CODE_OFFSET      64    /* code PDM = dBm + 64 ; 0 = non renseigne */
 
