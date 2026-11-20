@@ -12,6 +12,22 @@ attribut `0x4000` en chaîne). Voir `Doc/LORA_PROTOCOL.md` §8.
 Publier une version : modifier `app_version.h`, compléter ce fichier, commiter,
 compiler (le binaire embarque alors le commit), poser le tag git `vX.Y.Z`.
 
+## 1.1.3 — économie d'énergie de la radio
+
+### Radio
+- Radio en sommeil (~0,4 µA) au lieu de la veille STDBY_RC (700 µA)
+  entre deux cycles de données, entre deux tentatives d'appairage et
+  pendant la recharge avant chaque PAIR_CONFIRM. Le courant économisé
+  revient à la recharge de la réserve.
+- Réveil automatique à la commande SPI suivante ; chaque émission refait
+  un reset et une configuration complète, comme avant.
+
+### Lecture à la demande (POLL)
+- Fenêtre d'écoute fermée dès qu'il est sûr qu'aucune requête n'arrive :
+  ~152 ms en SF11, ~118 ms en SF10, au lieu de 300 ms. Elle reste ouverte
+  300 ms dès qu'un en-tête LoRa est reçu. Suppose que la box répond au
+  plus 20 ms après la trame montante (cf. `Doc/LORA_PROTOCOL.md` §8).
+
 ## 1.1.2 — économie d'énergie pendant l'appairage
 
 Suite des essais de la 1.1.1 sur le triphasé : la recharge avant la

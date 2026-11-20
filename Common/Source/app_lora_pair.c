@@ -451,6 +451,10 @@ PUBLIC void APP_cbTimerLoraPair(void *pvParam)
     DBG_vPrintf(TRACE_LORA_PAIR, "LORA_PAIR: No response, retry %d\r\n",
                 u8PairTickCount);
 
+    /* Radio en sommeil jusqu'a la prochaine tentative : la prochaine
+     * PAIR_REQUEST refait un reset et une configuration complete. */
+    SX1280_SetSleep();
+
     /* Restart pairing timer for next tick */
     ZTIMER_eStart(u8TimerLoraPair, ZTIMER_TIME_MSEC(LORA_PAIR_TX_INTERVAL_MS));
 }
@@ -550,7 +554,11 @@ PRIVATE void vEndPairingWindow(void)
             "LORA_PAIR: pairing window expired, previous pairing restored (op_channel=%d SF%d)\r\n",
             sPairingData.u8OpChannel, APP_u8LoraPairGetSF());
 
-        APP_vLoraChannelSet(APP_u8LoraPairGetOpChannel());
+        /* Reset + configuration complete sur la config operationnelle : la
+         * radio sort peut-etre du sommeil, sur le canal de rendez-vous, et
+         * APP_vLoRaTicStart teste le PLL juste apres. */
+        APP_vLoRaTicReconfigureRadio(APP_u8LoraPairGetOpChannel(),
+                                     APP_u8LoraPairGetSF());
         vSetBlinkOnTime(LORA_LED_FLASH_DEFAULT_MS);
         vStartBlinkTimer(3000);
         APP_vLoRaTicStart();
@@ -1082,6 +1090,9 @@ PRIVATE void vSendPairConfirms(void)
 
     for (i = 0; i < LORA_PAIR_CONFIRM_COUNT; i++)
     {
+        /* Radio en sommeil pendant la recharge : chaque PAIR_CONFIRM refait
+         * un reset et une configuration complete. */
+        SX1280_SetSleep();
         vPairWaitUntil(u32PairRespMs + au16AtMs[i]);
         uint32 u32StartMs = OSA_TimeGetMsec() - u32PairRespMs;
         bool_t bTxDone = bSendPairConfirm(u8Seq);

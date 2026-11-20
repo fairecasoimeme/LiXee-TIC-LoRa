@@ -70,6 +70,7 @@ PRIVATE void vSendPollResponse(uint16 u16Cluster, uint16 u16Attr,
 PRIVATE uint8 u8PutU16(uint8 *p, uint16 v);
 PRIVATE uint8 u8PutU32(uint8 *p, uint32 v);
 PRIVATE uint8 u8PutAscii(uint8 *p, const uint8 *src, uint8 u8MaxLen);
+PRIVATE uint16 u16HeaderDeadlineMs(void);
 
 /****************************************************************************/
 /***        Exported Functions                                            ***/
@@ -114,9 +115,11 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
         SX1280_SetPacketParams(&pktParams);
     }
 
-    /* 2) DIO1 sur RX_DONE + CRC_ERROR */
+    /* 2) DIO1 sur RX_DONE + CRC_ERROR. HEADER_VALID / HEADER_ERROR sont
+     *    seulement memorises : ils disent si une trame est en cours. */
     SX1280_SetDioIrqParams(
-        SX1280_IRQ_RX_DONE | SX1280_IRQ_CRC_ERROR,
+        SX1280_IRQ_RX_DONE | SX1280_IRQ_CRC_ERROR |
+        SX1280_IRQ_HEADER_VALID | SX1280_IRQ_HEADER_ERROR,
         SX1280_IRQ_RX_DONE | SX1280_IRQ_CRC_ERROR);
 
     SX1280_ClearIrqStatus(SX1280_IRQ_ALL);
@@ -133,6 +136,8 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
     uint32 u32CycPerMs = SystemCoreClock / 1000;
     if (u32CycPerMs == 0) u32CycPerMs = 12000;
     uint32 u32WaitCycles = (uint32)LORA_CMD_RX_WINDOW_MS * u32CycPerMs;
+    uint32 u32HeaderCycles = (uint32)u16HeaderDeadlineMs() * u32CycPerMs;
+    bool_t bHeaderChecked = FALSE;
 
     bool_t bDio1 = FALSE;
     while (DWT->CYCCNT < u32WaitCycles)
@@ -141,6 +146,18 @@ PUBLIC void APP_vLoraCmdRxWindow(void)
         {
             bDio1 = TRUE;
             break;
+        }
+
+        /* Echeance de l'en-tete : sans en-tete a ce stade, aucune requete
+         * de la box n'arrivera dans cette fenetre (cf. LORA_CMD_BOX_*). */
+        if (!bHeaderChecked && DWT->CYCCNT >= u32HeaderCycles)
+        {
+            bHeaderChecked = TRUE;
+            if (!(SX1280_GetIrqStatus() &
+                  (SX1280_IRQ_HEADER_VALID | SX1280_IRQ_HEADER_ERROR)))
+            {
+                break;
+            }
         }
         ZTIMER_vTask();
 #ifdef WATCHDOG_ALLOWED
@@ -503,6 +520,32 @@ PRIVATE uint8 u8PutU32(uint8 *p, uint32 v)
 
 /* Copie une chaine ASCII imprimable, espaces/nuls de fin retires, bornee a
  * u8MaxLen et a LORA_POLL_VALUE_MAX. */
+/****************************************************************************
+ *
+ * NAME: u16HeaderDeadlineMs
+ *
+ * DESCRIPTION:
+ * Instant (ms depuis l'ouverture de la fenetre) ou l'en-tete d'une requete
+ * de la box serait deja recu, au SF operationnel. Cf. LORA_CMD_BOX_*.
+ *
+ ****************************************************************************/
+PRIVATE uint16 u16HeaderDeadlineMs(void)
+{
+    uint8  u8SF = APP_u8LoraPairGetSF();
+    /* Duree d'un symbole : 2^SF / 406,25 kHz */
+    uint32 u32SymUs = ((uint32)1 << u8SF) * 10000UL / 4063UL;
+    uint32 u32PreUs = LORA_CMD_BOX_PREAMBLE_US;
+    if (u32PreUs < LORA_CMD_BOX_PREAMBLE_MIN_SYM * u32SymUs)
+        u32PreUs = LORA_CMD_BOX_PREAMBLE_MIN_SYM * u32SymUs;
+    /* + 4,25 symboles de synchro + 8 symboles d'en-tete = 12,25 symboles */
+    uint32 u32Ms = LORA_CMD_BOX_DELAY_MS
+                 + (u32PreUs + (u32SymUs * 49UL) / 4UL) / 1000UL
+                 + LORA_CMD_HEADER_MARGIN_MS;
+    if (u32Ms > LORA_CMD_RX_WINDOW_MS)
+        u32Ms = LORA_CMD_RX_WINDOW_MS;
+    return (uint16)u32Ms;
+}
+
 PRIVATE uint8 u8PutAscii(uint8 *p, const uint8 *src, uint8 u8MaxLen)
 {
     if (u8MaxLen > LORA_POLL_VALUE_MAX)

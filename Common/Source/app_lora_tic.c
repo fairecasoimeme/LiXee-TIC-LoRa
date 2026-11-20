@@ -497,6 +497,11 @@ PUBLIC void APP_vLoRaTicSendPacket(void)
      * c'est le moment ou il peut deposer une commande. Modele Class A. */
     APP_vLoraCmdRxWindow();
 
+    /* Radio en sommeil jusqu'au prochain cycle (~0,4 uA au lieu de 700 uA
+     * en STDBY_RC) : ce courant revient a la recharge de la reserve. Le
+     * prochain TX refait un reset et une configuration complete. */
+    SX1280_SetSleep();
+
     /* Relancer le timer LoRa pour le prochain cycle
      * (intervalle = temps entre la FIN d'un TX et le DEBUT du suivant).
      * L'intervalle est pilotable par downlink, d'ou la relecture a chaque

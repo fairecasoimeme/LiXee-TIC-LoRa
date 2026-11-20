@@ -843,7 +843,23 @@ Chronologie dans la fenêtre :
 | T+5 ms | ZLinky en RX (restauration IRQ DIO1 + `payloadLength`) |
 | T+20 ms | récepteur a déchiffré, consulté sa file, démarre son TX |
 | T+60 ms | préambule détecté par le ZLinky |
-| T+300 ms | fenêtre fermée, retour en standby |
+| T+300 ms | fenêtre fermée, radio en sommeil |
+
+**Fermeture anticipée** (firmware ≥ 1.1.3). Si aucun en-tête LoRa n'a été
+reçu à l'instant où celui d'une requête aurait dû arriver, le ZLinky ferme la
+fenêtre sans attendre les 300 ms. L'échéance suppose que la box commence à
+émettre **au plus 20 ms** après la fin de la trame montante, avec un préambule
+d'environ 40 ms (`16250 >> SF` symboles, 8 au minimum) :
+
+| SF opérationnel | 12 | 11 | 10 | 9 |
+|---|---|---|---|---|
+| Fermeture anticipée à | ~254 ms | ~152 ms | ~118 ms | ~104 ms |
+
+Ces valeurs comptent 30 ms de marge. **Si la box répond plus tard, ou avec
+un préambule plus long, ses requêtes seront perdues** : toute évolution de
+ce délai côté box doit être répercutée ici (`LORA_CMD_BOX_*` dans
+`app_lora_cmd.h`). Le SX1280 ne signale pas la détection d'un préambule en
+LoRa : seul l'en-tête permet de savoir qu'une trame arrive.
 
 > **Pourquoi une fenêtre et pas une écoute permanente** : le SX1280 tire
 > ~7-10 mA en RX contre ~0,6 mA en standby. Écouter en permanence coûterait

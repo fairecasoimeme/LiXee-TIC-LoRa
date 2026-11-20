@@ -28,6 +28,18 @@ uint8_t SX1280_HAL_WaitOnBusy(void);
 void SX1280_HAL_WriteCommand(uint8_t cmd, uint8_t *buffer, uint16_t size);
 
 /**
+ * @brief Comme SX1280_HAL_WriteCommand, sans attendre BUSY apres la commande
+ *        (necessaire pour SetSleep : BUSY reste haut pendant le sommeil).
+ */
+void SX1280_HAL_WriteCommandNoWait(uint8_t cmd, uint8_t *buffer, uint16_t size);
+
+/**
+ * @brief Signale que le SX1280 dort : la prochaine commande le reveillera
+ *        d'abord par un front descendant sur NSS.
+ */
+void SX1280_HAL_MarkAsleep(void);
+
+/**
  * @brief Lit une réponse du SX1280
  * @param cmd Commande de lecture
  * @param buffer Buffer pour recevoir les données

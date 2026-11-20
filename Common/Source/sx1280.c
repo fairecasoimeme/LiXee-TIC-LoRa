@@ -29,6 +29,15 @@ void SX1280_SetStandby(uint8_t mode)
     SX1280_HAL_WriteCommand(SX1280_CMD_SET_STANDBY, &mode, 1);
 }
 
+void SX1280_SetSleep(void)
+{
+    /* SetSleep n'est accepte qu'en STDBY */
+    SX1280_SetStandby(SX1280_STANDBY_RC);
+    uint8_t u8SleepConfig = 0x00;   /* aucune retention */
+    SX1280_HAL_WriteCommandNoWait(SX1280_CMD_SET_SLEEP, &u8SleepConfig, 1);
+    SX1280_HAL_MarkAsleep();
+}
+
 void SX1280_SetPacketType(uint8_t packetType)
 {
     SX1280_HAL_WriteCommand(SX1280_CMD_SET_PACKET_TYPE, &packetType, 1);
